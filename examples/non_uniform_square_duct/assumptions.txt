@@ -1,0 +1,4 @@
+It is assumed that y and z are the directions that boast the non-uniform mesh.
+The z direction is made using the grid stretching function and the y direction is made using user input from the file mesh.csv.
+Cell wall position is given in this mesh.csv for the moment.
+At the moment the user input is giving clustering in the middle.

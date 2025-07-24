@@ -1,7 +1,9 @@
 &dns
-ng(1:3) = 1024, 256, 128
+ng(1:3) = 1024, 0, 128
 l(1:3) = 34., 1., 1.
-gtype = 1, gr = 0.
+gtype = 0, 0, 1
+gr = 0., 0., 4.
+is_cell_length = .false.
 cfl = 0.95, dtmax = 1.e5, dt_f = -1.
 visci = 600.
 inivel = 'pdc'
