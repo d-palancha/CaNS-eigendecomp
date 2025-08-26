@@ -6,6 +6,7 @@
 ! -
 module mod_param
 use mod_types
+use mod_initgrid, only: pos_array
 #if defined(_OPENACC)
 use cudecomp
 #endif
@@ -29,7 +30,7 @@ real(rp), parameter, dimension(3)   :: rkcoeff12 = rkcoeff(1,:)+rkcoeff(2,:)
 !
 ! variables to be determined from the input file
 !
-integer , protected, dimension(3) :: ng
+integer , dimension(3) :: ng ! not protected -> could be changed if non-uniform meshes are used
 real(rp), protected, dimension(3) :: l
 integer , protected, dimension(3) :: gtype
 real(rp), protected, dimension(3) :: gr
@@ -61,8 +62,9 @@ real(rp), protected, dimension(3) :: bforce
 logical , protected, dimension(3) :: is_forced
 real(rp), protected, dimension(3) :: velf
 !
-real(rp), protected, dimension(3) :: dl,dli
+type(pos_array), protected :: dl(3), dli(3)
 real(rp), protected :: visc
+logical, protected, dimension(3) :: is_user_mesh
 !
 ! scalar input parameters
 !
@@ -108,8 +110,9 @@ contains
     use mpi
     implicit none
     character(len=*), parameter :: input_file = 'input.nml'
+    character(len=*), parameter :: mesh_file = 'mesh.csv'
     integer, intent(in) :: myid
-    integer :: iunit,ierr
+    integer :: iunit,ierr,iunit_mesh_file
     character(len=1024) :: c_iomsg
     integer :: i_dim
     namelist /dns/ &
@@ -161,6 +164,7 @@ contains
     gacc(:) = 0.
     nscal = 0
     is_cell_length = .false.
+    is_user_mesh(:) = .false.
     open(newunit=iunit,file=input_file,status='old',action='read',iostat=ierr,iomsg=c_iomsg)
       if(ierr /= 0) then
         if(myid == 0) print*, 'Error reading the input file: ', trim(c_iomsg)
@@ -177,15 +181,47 @@ contains
         close(iunit)
         error stop
       end if
-      ! 
-      do i_dim=1,3
-        if ng(i_dim) == 0
-          dl(i_dim) = -1
-        else
-          dl(i_dim) = l(i_dim)/(1.*ng(i_dim))
       !dl(:) = l(:)/(1.*ng(:))
+      !
+      ! read mesh.csv file
+      !
+      if(any(ng(:) == 0)) then
+        do i_dim = 1,3
+          if(ng(i_dim) == 0) then
+            is_user_mesh = .true.
+          end if
+        end do 
+        open(newunit=iunit_mesh_file,file=mesh_file,status='old',action='read',iostat=ierr,iomsg=c_iomsg)
+          if(ierr /= 0) then
+            if(myid == 0) print*, 'Error reading the mesh file: ', trim(c_iomsg)
+            if(myid == 0) print*, 'Aborting...'
+            call MPI_FINALIZE(ierr)
+            close(iunit_mesh_file)
+            error stop
+          end if
+          !
+          ! section of code where the contents of the mesh file are read, resulting in three separate vectors which are the z%f and
+          ! z%c arrays - note that for the directions which correspond to non-uniform mesh but are
+          ! generated using the grid-stretching functions (igrid directions), z(igrid)%f and z(igrid)%c are still to go through the
+          ! initgrid submodule 
+          !
+          if is_cell_length==.false. then
+            ! z%f is obtained automatically
+            ! z%c is obtained by (z(i)%f(j) + z(i)%f(j+1))/2
+          else
+            ! z%c is obtained automatically
+            ! z%f is also obtained
+          end if
+        
+
+
+      end if
+      !
       dli(:) = dl(:)**(-1)
       visc = visci**(-1)
+
+
+
       if(all([1,2,3] /= ipencil_axis)) then
         ipencil_axis = 1 ! default to one
         if(myid == 0) print*, 'Warning: prescribed value of `ipencil_axis` different than 1/2/3.', trim(c_iomsg)

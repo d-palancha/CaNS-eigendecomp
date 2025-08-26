@@ -1,0 +1,71 @@
+Below is the summarized program structure from which a diagram tree that describes the architecture can be drawn:
+
+call MPI_INIT(ierr) - initializes the MPI execution environment, gives ierr as an integer output that relates to errors in the MPI process
+call MPI_COMM_RANK(MPI_COMM_WORLD,myid,ierr) - determines the rank of the calling process in the communicator. its use is in determining the roles of the various processes of a communicator as rank 0 is usually the manager and rank!=0 are usually compute ranks.
+call read_input(myid) - reads the input.nml file. goes to the param.f90. also defines defaults for some inputs. assigns what it reads to relevant variables which are imported then to main.
+call initmpi(ng,dims,cbcpre,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z,nb,is_bound) - at the moment I have very little clue what this does. probably is responsible for the domain decomposition into pencil domains and attributing threads to each. also defines the local n for each pencil domain, along with the lo and hi that defines the relation between n and ng.
+call initialize_scalars(scalars,nscal,n,n_z) - allocates memory for the arbitrary scalars. it also attributes some of the inputs from read_input(myid) to variables that will be used for the calculations.
+
+begin simulation
+
+call initgrid(gtype,ng(3),gr,l(3),dzc_g,dzf_g,zc_g,zf_g) - initializes the non-uniform grid along the z direction!!!! also defines parameters for clustering for the non-uniform grid. probably useful for a starting point to extrapolate to the other three directions if the user does not want to provide the vectors with the positions of each variable.
+writing basic information to run/data/ folder such as grid.bin and geometry.out
+
+call test_sanity_input(ng,dims,stop_type,cbcvel,cbcpre,bcvel,bcpre,is_forced) - test input files before advancing with calculation. comes from sanity.f90. just checks if what is given in the input.nml is what is expected by the program. if it deviates from it, it will kill the simulation before any calculation. this place is useful for determining the validity of inputs for what will be added. also contains a subroutine called abortit that might be useful to kill the simulation at any time.
+
+initialize Poisson solver
+call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcpre,bcpre(:,:), &
+                  lambdaxyp,['c','c','c'],ap,bp,cp,arrplanp,normfftp,rhsbp%x,rhsbp%y,rhsbp%z) - initialize Poisson solver. this comes from initsolver.f90, which also initializes the helmholtz solver. this will be the place where the eigendecomposition is made. it can also have a separate module by itself, but most likely will reside here. at the moment it calculates the eigenvalues with ffts for each direction separately. it calculates the matrices for each direction, along with the right-hand side for each of the direction.
+
+
+if(is_impdiff)
+call initsolver for the 3 helmholtz equations - does the same thing as above but for the Helmholtz equation. this actually does it using the same function initsolver which comes from initsolver.f90
+
+if(.not.restart)
+time and istep = 0
+call initflow(inivel,bcvel,ng,lo,l,dl,zc,zf,dzc,dzf,visc,is_forced,velf,bforce,is_wallturb,u,v,w,p) - computes the initial conditions of the flow, including its velocity field, the scalar field for an abitrary number of scalars and the pressure field, which by default is set to zero everywhere except for tgv, tgw and ant
+call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w) - comes from bound.f90 and defines the boundary conditions for the velocity field. since domain decomposition is done, the boundary conditions have to be applied on the boundaries of each sub computational domain (the halo). 
+call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,p) - same thing but applies the boundary conditions to the pressure field and respective halos. it also updates the boundaries of the global domain and the halos everytime step since the calculations change the values of the ghost cells
+call chkdt(n,dl,dzci,dzfi,visc,alpha_max,u,v,w,dt_cfl) - computes the maximum allowed time step.
+calculate the actual dt
+
+main loop now:
+for the 3 time steps of RK3:
+
+perform arbitrary scalars operations
+
+call rk(rkcoeff(:,irk),n,dli,dzci,dzfi,grid_vol_ratio_c,grid_vol_ratio_f,visc,dt,p, &
+              is_forced,velf,bforce,gacc,beta,scalars,dudtrko,dvdtrko,dwdtrko,u,v,w,f) - establishes the low-storage 3rd-order Runge-Kutta scheme for time integration of the momentum equations
+call bulk_forcing(n,is_forced,f,u,v,w) - defines the bulk forcing on the flow
+
+if(is_impdiff)
+solve_helmholtz for the three directions - this gives the prediction velocity.
+
+call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w) - adaptation of the boundary conditions with regard to this new prediction velocity.
+call fillps(n,dli,dzfi,dtrki,u,v,w,pp) - calculates the divergence of the prediction velocity field. needs adaptation.
+call updt_rhs_b(['c','c','c'],cbcpre,n,is_bound,rhsbp%x,rhsbp%y,rhsbp%z,pp) - comes from bound.f90. computes the right-hand side of the poisson equation with the divergence of the prediction velocity and the rk coefficients.
+call solver(n,ng,arrplanp,normfftp,lambdaxyp,ap,bp,cp,cbcpre,['c','c','c'],pp,is_ptdma_update_p,ap_d,cp_d) - solves the pressure poisson equation, which is done with FA in this case.
+call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,pp) - defines the boundary conditions but this times for the correction presssure phi.
+call correc(n,dli,dzci,dtrk,pp,u,v,w) - corrects the velocity from the prediction velocity and the correction pressure
+call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dl,dzc,dzf,u,v,w) - defines the boundary conditions of the velocity field since it was changed by the correction step above
+call updatep(n,dli,dzci,dzfi,alpha,pp,p) - with the correction pressure, one obtains the true pressure field
+call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,p) - since a new pressure field is obtained, the boundary conditions have also to be restated into the field since the previous step changed them
+
+end do for the 3 time steps of RK3
+
+check simulation stopping criteria
+
+if it is time to calculate a new timestep:
+call chkdt(n,dl,dzci,dzfi,visc,alpha_max,u,v,w,dt_cfl) - calculates the maximum allowable timestep from the cfl conditions. does not calculate the actual dt that will be used
+
+call chkdiv(lo,hi,dli,dzfi,u,v,w,divtot,divmax) - checks divergence of individual cell units
+
+output routines
+
+end main loop
+
+clear ffts with call fftend(arrplanp)
+
+finalise decomp libraries and finalise MPI
+call decomp_2d_finalize
+call MPI_FINALIZE(ierr)
