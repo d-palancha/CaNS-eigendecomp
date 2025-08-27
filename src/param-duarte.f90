@@ -27,6 +27,11 @@ real(rp), parameter, dimension(2,3) :: rkcoeff = reshape([32._rp/60._rp,  0._rp 
                                                           25._rp/60._rp, -17._rp/60._rp, &
                                                           45._rp/60._rp, -25._rp/60._rp], shape(rkcoeff))
 real(rp), parameter, dimension(3)   :: rkcoeff12 = rkcoeff(1,:)+rkcoeff(2,:)
+type xyz
+  real(rp), allocatable :: x(:)
+  real(rp), allocatable :: y(:)
+  real(rp), allocatable :: z(:)
+end type
 !
 ! variables to be determined from the input file
 !
@@ -62,9 +67,11 @@ real(rp), protected, dimension(3) :: bforce
 logical , protected, dimension(3) :: is_forced
 real(rp), protected, dimension(3) :: velf
 !
-type(pos_array), protected :: dl(3), dli(3)
 real(rp), protected :: visc
 logical, protected, dimension(3) :: is_user_mesh
+character(len=1) :: dim_char
+real(rp) :: val
+integer, dimension(3) :: npoints
 !
 ! scalar input parameters
 !
@@ -105,16 +112,21 @@ logical, protected :: is_impdiff = .false., is_impdiff_1d = .false., &
                       is_fast_mom_kernels = .true., &
                       is_gridpoint_natural_channel = .false.
 contains
-  subroutine read_input(myid)
+  subroutine read_input(myid, mesh_output, dl, dli)
     use, intrinsic :: iso_fortran_env, only: iostat_end
     use mpi
     implicit none
     character(len=*), parameter :: input_file = 'input.nml'
     character(len=*), parameter :: mesh_file = 'mesh.csv'
     integer, intent(in) :: myid
+    type(xyz), allocatable, intent(out) :: mesh_output
+    ! dl and dli are declared after reading the input file, but they are both intent(out) 
     integer :: iunit,ierr,iunit_mesh_file
     character(len=1024) :: c_iomsg
     integer :: i_dim
+    integer :: x_counter = 1
+    integer :: y_counter = 1
+    integer :: z_counter = 1
     namelist /dns/ &
                   ng, &
                   l, &
@@ -181,24 +193,72 @@ contains
         close(iunit)
         error stop
       end if
-      !dl(:) = l(:)/(1.*ng(:))
       !
-      ! read mesh.csv file
+      ! read mesh.csv file - this section can be throughly optimised, it is repeating exactly the same loop twice once for
+      ! allocation and once for assignment. there has to be a better way of handling this
       !
       if(any(ng(:) == 0)) then
+        type(pos_array), intent(out) :: dl(3), dli(3)
+        ncell_user(:) = 0
         do i_dim = 1,3
           if(ng(i_dim) == 0) then
-            is_user_mesh = .true.
+            is_user_mesh(i_dim) = .true.
           end if
-        end do 
+        end do
         open(newunit=iunit_mesh_file,file=mesh_file,status='old',action='read',iostat=ierr,iomsg=c_iomsg)
           if(ierr /= 0) then
-            if(myid == 0) print*, 'Error reading the mesh file: ', trim(c_iomsg)
+            if(myid == 0) print*, 'Error opening the mesh file: ', trim(c_iomsg)
             if(myid == 0) print*, 'Aborting...'
             call MPI_FINALIZE(ierr)
             close(iunit_mesh_file)
             error stop
           end if
+          do ! determine size of each user given direction in the mesh.csv
+            read(iunit_mesh_file, *, iostat=ierr, iomsg=c_iomsg) dim_char, val
+            if(ierr /= 0) then
+              if(myid == 0) print*, 'Error reading the mesh file: ', trim(c_iomsg)
+              if(myid == 0) print*, 'Aborting...'
+              call MPI_FINALIZE(ierr)
+              close(iunit_mesh_file)
+              error stop
+            end if
+            !
+            select case (dim_char)
+            case ('x', 'X')
+              npoints(1) = npoints(1) + 1
+            case ('y', 'Y')
+              npoints(2) = npoints(2) + 1
+            case ('z', 'Z')
+              npoints(3) = npoints(3) + 1
+            case default
+              if(myid == 0) print *, 'Warning: unknown direction present in mesh file: ', dim_char
+              if(myid == 0) print *, 'Aborting...'
+              call MPI_FINALIZE(ierr)
+              close(iunit_mesh_file)
+              error stop
+            end select
+          end do
+          if(npoints(1) /= 0) allocate(mesh_output%x(1:npoints(1)))
+          if(npoints(2) /= 0) allocate(mesh_output%y(1:npoints(2)))
+          if(npoints(3) /= 0) allocate(mesh_output%z(1:npoints(3)))
+          do
+            read(iunit_mesh_file, *, iostat=ierr, iomsg=c_iomsg) dim_char, val
+            select case(dim_char)
+            case ('x', 'X')
+              mesh_output%x(x_counter) = val
+              x_counter = x_counter + 1
+            case ('y', 'Y')
+              mesh_output%y(y_counter) = val
+              y_counter = y_counter + 1
+            case ('z', 'Z')
+              mesh_output%z(z_counter) = val
+              z_counter = z_counter + 1
+          end do
+      !
+      else
+        real(rp), protected, intent(out) :: dl(3), dli(3)
+        dl(:) = l(:)/(1.*ng(:))
+        dli(:) = dl(:)**(-1)
           !
           ! section of code where the contents of the mesh file are read, resulting in three separate vectors which are the z%f and
           ! z%c arrays - note that for the directions which correspond to non-uniform mesh but are
@@ -212,16 +272,10 @@ contains
             ! z%c is obtained automatically
             ! z%f is also obtained
           end if
-        
-
-
       end if
       !
-      dli(:) = dl(:)**(-1)
       visc = visci**(-1)
-
-
-
+      !
       if(all([1,2,3] /= ipencil_axis)) then
         ipencil_axis = 1 ! default to one
         if(myid == 0) print*, 'Warning: prescribed value of `ipencil_axis` different than 1/2/3.', trim(c_iomsg)

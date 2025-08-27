@@ -46,7 +46,7 @@ program cans
   use mod_mom            , only: bulk_forcing
   use mod_rk             , only: rk,rk_scal
   use mod_output         , only: out0d,gen_alias,out1d,out1d_chan,out2d,out3d,write_log_output,write_visu_2d,write_visu_3d
-  use mod_param          , only: ng,l,dl,dli, &
+  use mod_param          , only: ng,l, &
                                  gtype, &
                                  gr, &
                                  is_cell_length, &
@@ -68,7 +68,8 @@ program cans
                                  is_timing, &
                                  is_impdiff,is_impdiff_1d, &
                                  is_poisson_pcr_tdma, &
-                                 is_mask_divergence_check
+                                 is_mask_divergence_check, &
+                                 xyz
   use mod_sanity         , only: test_sanity_input,test_sanity_solver
   use mod_scal           , only: scalar,initialize_scalars,bulk_forcing_s
 #if !defined(_OPENACC &)
@@ -119,6 +120,7 @@ program cans
   integer :: irk,istep
   type(pos_array) :: z(3), dz(3), dzi(3), &
                      z_g(3), dz_g(3), dzi_g(3)
+  real(rp), allocatable, dimension(2) :: mesh_output
   real(rp), allocatable, dimension(:) :: grid_vol_ratio_c,grid_vol_ratio_f
   real(rp) :: meanvelu,meanvelv,meanvelw
   real(rp), dimension(3) :: dpdl
@@ -151,9 +153,12 @@ program cans
   call MPI_INIT(ierr)
   call MPI_COMM_RANK(MPI_COMM_WORLD,myid,ierr)
   !
-  ! read parameter file
+  ! read parameter file - solve the fact dl and dli change between type(xyz) and real(rp), dimension(3) depending on input
   !
-  call read_input(myid)
+  call read_input(myid, mesh_output)
+  !if(all(ng(:))==0) then
+  !  dl(:) = lg(:)/(1.*
+  !end if
   !
   ! initialize MPI/OpenMP
   !
