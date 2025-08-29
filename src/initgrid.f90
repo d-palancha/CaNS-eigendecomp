@@ -9,7 +9,13 @@ module mod_initgrid
   use mod_types
   implicit none
   private
-  public initgrid
+  !
+  type pos_array
+    real(rp), allocatable :: f(:)
+    real(rp), allocatable :: c(:)
+  end type
+  !
+  public initgrid, pos_array
   contains
   subroutine initgrid(gtype,n,gr,lz,dzc,dzf,zc,zf)
     !

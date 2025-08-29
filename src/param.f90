@@ -6,6 +6,7 @@
 ! -
 module mod_param
 use mod_types
+use mod_initgrid, only: pos_array
 #if defined(_OPENACC)
 use cudecomp
 #endif
@@ -26,13 +27,19 @@ real(rp), parameter, dimension(2,3) :: rkcoeff = reshape([32._rp/60._rp,  0._rp 
                                                           25._rp/60._rp, -17._rp/60._rp, &
                                                           45._rp/60._rp, -25._rp/60._rp], shape(rkcoeff))
 real(rp), parameter, dimension(3)   :: rkcoeff12 = rkcoeff(1,:)+rkcoeff(2,:)
+type xyz
+  real(rp), allocatable :: x(:)
+  real(rp), allocatable :: y(:)
+  real(rp), allocatable :: z(:)
+end type
 !
 ! variables to be determined from the input file
 !
-integer , protected, dimension(3) :: ng
+integer , dimension(3) :: ng ! not protected -> could be changed if non-uniform meshes are used
 real(rp), protected, dimension(3) :: l
-integer , protected :: gtype
-real(rp), protected :: gr
+integer , protected, dimension(3) :: gtype
+real(rp), protected, dimension(3) :: gr
+logical , protected :: is_cell_length
 real(rp), protected :: cfl,dtmax,dt_f
 real(rp), protected :: visci
 !
@@ -60,8 +67,12 @@ real(rp), protected, dimension(3) :: bforce
 logical , protected, dimension(3) :: is_forced
 real(rp), protected, dimension(3) :: velf
 !
-real(rp), protected, dimension(3) :: dl,dli
+type(pos_array), dimension(3) :: dl, dli
 real(rp), protected :: visc
+logical, protected, dimension(3) :: is_user_mesh
+character(len=1) :: dim_char
+real(rp) :: val
+integer, dimension(3) :: npoints
 !
 ! scalar input parameters
 !
@@ -102,18 +113,26 @@ logical, protected :: is_impdiff = .false., is_impdiff_1d = .false., &
                       is_fast_mom_kernels = .true., &
                       is_gridpoint_natural_channel = .false.
 contains
-  subroutine read_input(myid)
+  subroutine read_input(myid, mesh_input)
     use, intrinsic :: iso_fortran_env, only: iostat_end
     use mpi
     implicit none
     character(len=*), parameter :: input_file = 'input.nml'
+    character(len=*), parameter :: mesh_file = 'mesh.csv'
     integer, intent(in) :: myid
-    integer :: iunit,ierr
+    type(xyz), allocatable, intent(out) :: mesh_input
+    integer :: iunit,ierr,iunit_mesh_file
     character(len=1024) :: c_iomsg
+    integer :: i_dim
+    integer :: x_counter = 1
+    integer :: y_counter = 1
+    integer :: z_counter = 1
     namelist /dns/ &
                   ng, &
                   l, &
-                  gtype,gr, &
+                  gtype, &
+                  gr, &
+                  is_cell_length, &
                   cfl,dtmax,dt_f, &
                   visci, &
                   inivel, &
@@ -156,6 +175,8 @@ contains
     dt_f = -1.
     gacc(:) = 0.
     nscal = 0
+    is_cell_length = .false.
+    is_user_mesh(:) = .false.
     open(newunit=iunit,file=input_file,status='old',action='read',iostat=ierr,iomsg=c_iomsg)
       if(ierr /= 0) then
         if(myid == 0) print*, 'Error reading the input file: ', trim(c_iomsg)
@@ -173,9 +194,73 @@ contains
         error stop
       end if
       !
-      dl(:) = l(:)/(1.*ng(:))
-      dli(:) = dl(:)**(-1)
+      ! read mesh.csv file - this section can be throughly optimised, it is repeating exactly the same loop twice once for
+      ! allocation and once for assignment. there has to be a better way of handling this
+      !
+      if(any(ng(:) == 0)) then
+        ncell_user(:) = 0
+        do i_dim = 1,3
+          if(ng(i_dim) == 0) then
+            is_user_mesh(i_dim) = .true.
+          end if
+        end do
+        open(newunit=iunit_mesh_file,file=mesh_file,status='old',action='read',iostat=ierr,iomsg=c_iomsg)
+          if(ierr /= 0) then
+            if(myid == 0) print*, 'Error opening the mesh file: ', trim(c_iomsg)
+            if(myid == 0) print*, 'Aborting...'
+            call MPI_FINALIZE(ierr)
+            close(iunit_mesh_file)
+            error stop
+          end if
+          do ! determine size of each user given direction in the mesh.csv
+            read(iunit_mesh_file, *, iostat=ierr, iomsg=c_iomsg) dim_char, val
+            if(ierr /= 0) then
+              if(myid == 0) print*, 'Error reading the mesh file: ', trim(c_iomsg)
+              if(myid == 0) print*, 'Aborting...'
+              call MPI_FINALIZE(ierr)
+              close(iunit_mesh_file)
+              error stop
+            end if
+            !
+            select case (dim_char)
+            case ('x', 'X')
+              npoints(1) = npoints(1) + 1
+            case ('y', 'Y')
+              npoints(2) = npoints(2) + 1
+            case ('z', 'Z')
+              npoints(3) = npoints(3) + 1
+            case default
+              if(myid == 0) print *, 'Warning: unknown direction present in mesh file: ', dim_char
+              if(myid == 0) print *, 'Aborting...'
+              call MPI_FINALIZE(ierr)
+              close(iunit_mesh_file)
+              error stop
+            end select
+          end do
+          if(npoints(1) /= 0) allocate(mesh_input%x(1:npoints(1)))
+          if(npoints(2) /= 0) allocate(mesh_input%y(1:npoints(2)))
+          if(npoints(3) /= 0) allocate(mesh_input%z(1:npoints(3)))
+          do
+            read(iunit_mesh_file, *, iostat=ierr, iomsg=c_iomsg) dim_char, val
+            select case(dim_char)
+            case ('x', 'X')
+              mesh_input%x(x_counter) = val
+              x_counter = x_counter + 1
+            case ('y', 'Y')
+              mesh_input%y(y_counter) = val
+              y_counter = y_counter + 1
+            case ('z', 'Z')
+              mesh_input%z(z_counter) = val
+              z_counter = z_counter + 1
+            end select
+          end do
+      else ! at the current state, this will never be found since user-given meshes are always an input
+        dl(:) = l(:)/(1.*ng(:))
+        dli(:) = dl(:)**(-1)
+      end if
+      !
       visc = visci**(-1)
+      !
       if(all([1,2,3] /= ipencil_axis)) then
         ipencil_axis = 1 ! default to one
         if(myid == 0) print*, 'Warning: prescribed value of `ipencil_axis` different than 1/2/3.', trim(c_iomsg)

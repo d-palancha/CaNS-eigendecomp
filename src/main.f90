@@ -38,7 +38,7 @@ program cans
   use mod_fft            , only: fftini,fftend
   use mod_fillps         , only: fillps
   use mod_initflow       , only: initflow,initscal
-  use mod_initgrid       , only: initgrid
+  use mod_initgrid       , only: initgrid, pos_array
   use mod_initmpi        , only: initmpi
   use mod_initsolver     , only: initsolver
   use mod_solve_helmholtz, only: solve_helmholtz,rhs_bound
@@ -46,8 +46,10 @@ program cans
   use mod_mom            , only: bulk_forcing
   use mod_rk             , only: rk,rk_scal
   use mod_output         , only: out0d,gen_alias,out1d,out1d_chan,out2d,out3d,write_log_output,write_visu_2d,write_visu_3d
-  use mod_param          , only: ng,l,dl,dli, &
-                                 gtype,gr, &
+  use mod_param          , only: ng,l, &
+                                 gtype, &
+                                 gr, &
+                                 is_cell_length, &
                                  cfl,dtmax,dt_f, &
                                  visc,alpha_max, &
                                  inivel,is_wallturb, &
@@ -66,10 +68,11 @@ program cans
                                  is_timing, &
                                  is_impdiff,is_impdiff_1d, &
                                  is_poisson_pcr_tdma, &
-                                 is_mask_divergence_check
+                                 is_mask_divergence_check, &
+                                 xyz
   use mod_sanity         , only: test_sanity_input,test_sanity_solver
   use mod_scal           , only: scalar,initialize_scalars,bulk_forcing_s
-#if !defined(_OPENACC)
+#if !defined(_OPENACC &)
   use mod_solver         , only: solver
 #else
   use mod_solver_gpu     , only: solver => solver_gpu
@@ -115,9 +118,10 @@ program cans
   !
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
   integer :: irk,istep
-  real(rp), allocatable, dimension(:) :: dzc  ,dzf  ,zc  ,zf  ,dzci  ,dzfi, &
-                                         dzc_g,dzf_g,zc_g,zf_g,dzci_g,dzfi_g, &
-                                         grid_vol_ratio_c,grid_vol_ratio_f
+  type(pos_array), dimension(3) :: z, dz, dzi, &
+                                   z_g, dz_g, dzi_g
+  type(xyz), allocatable :: mesh_input 
+  real(rp), allocatable, dimension(:) :: grid_vol_ratio_c,grid_vol_ratio_f
   real(rp) :: meanvelu,meanvelv,meanvelw
   real(rp), dimension(3) :: dpdl
   !
@@ -149,9 +153,10 @@ program cans
   call MPI_INIT(ierr)
   call MPI_COMM_RANK(MPI_COMM_WORLD,myid,ierr)
   !
-  ! read parameter file
+  ! read parameter file - solve the fact dl and dli change between type(xyz) and real(rp), dimension(3) depending on input
   !
-  call read_input(myid)
+  call read_input(myid, mesh_input)
+
   !
   ! initialize MPI/OpenMP
   !
@@ -181,20 +186,28 @@ program cans
     allocate(ap_d(n_z_d(1),n_z_d(2),n_z_d(3)), &
              cp_d(n_z_d(1),n_z_d(2),n_z_d(3)))
   end if
-  allocate(dzc( 0:n(3)+1), &
-           dzf( 0:n(3)+1), &
-           zc(  0:n(3)+1), &
-           zf(  0:n(3)+1), &
-           dzci(0:n(3)+1), &
-           dzfi(0:n(3)+1))
-  allocate(dzc_g( 0:ng(3)+1), &
-           dzf_g( 0:ng(3)+1), &
-           zc_g(  0:ng(3)+1), &
-           zf_g(  0:ng(3)+1), &
-           dzci_g(0:ng(3)+1), &
-           dzfi_g(0:ng(3)+1))
-  allocate(grid_vol_ratio_c,mold=dzc)
-  allocate(grid_vol_ratio_f,mold=dzf)
+  !
+  do k = 1, 3
+    allocate(dz(k)%c( 0:n(k)+1), &
+             dz(k)%f( 0:n(k)+1), &
+             z(k)%c(  0:n(k)+1), &
+             z(k)%f(  0:n(k)+1), &
+             dzi(k)%c(0:n(k)+1), &
+             dzi(k)%f(0:n(k)+1))
+    allocate(dz_g(k)%c( 0:ng(k)+1), &
+             dz_g(k)%f( 0:ng(k)+1), &
+             z_g(k)%c(  0:ng(k)+1), &
+             z_g(k)%f(  0:ng(k)+1), &
+             dzi_g(k)%c(0:ng(k)+1), &
+             dzi_g(k)%f(0:ng(k)+1))
+    allocate(dl(k)%c( 0:ng(k)+1), &
+             dl(k)%f( 0:ng(k)+1), &
+             dli(k)%c(0:ng(k)+1), &
+             dli(k)%f(0:ng(k)+1))
+  end do 
+  !
+  allocate(grid_vol_ratio_c,mold=dz(3)%c)
+  allocate(grid_vol_ratio_f,mold=dz(3)%f)
   allocate(rhsbp%x(n(2),n(3),0:1), &
            rhsbp%y(n(1),n(3),0:1), &
            rhsbp%z(n(1),n(2),0:1))
@@ -236,6 +249,12 @@ program cans
   if(myid == 0) print*, '*** Beginning of simulation ***'
   if(myid == 0) print*, '*******************************'
   if(myid == 0) print*, ''
+  !
+  if(any(ng(:)) == 0) then
+    call user_mesh(mesh_input, is_cell_length, ng, l, dl, dli, z_g, dz_g, dzi_g)
+  end if
+  !
+  do i = 1,3 
   call initgrid(gtype,ng(3),gr,l(3),dzc_g,dzf_g,zc_g,zf_g)
   if(myid == 0) then
     open(99,file=trim(datadir)//'grid.bin',action='write',form='unformatted',access='stream',status='replace')
