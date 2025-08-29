@@ -72,6 +72,7 @@ program cans
                                  xyz
   use mod_sanity         , only: test_sanity_input,test_sanity_solver
   use mod_scal           , only: scalar,initialize_scalars,bulk_forcing_s
+  use mod_user_mesh      , only: user_mesh
 #if !defined(_OPENACC &)
   use mod_solver         , only: solver
 #else
