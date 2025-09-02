@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: gitsubmodule
+    directory: "/"
+    schedule:
+      interval: monthly
+    allow:
+      - dependency-name: "dependencies/cuDecomp"
+      - dependency-name: "dependencies/diezDecomp/diezDecomp-repo"
+    labels: ["dependencies", "submodules"]

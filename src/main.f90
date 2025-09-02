@@ -1,6 +1,6 @@
 ! -
 !
-! SPDX-FileCopyrightText: Copyright (c) 2017-2022 Pedro Costa and the CaNS contributors. All rights reserved.
+! SPDX-FileCopyrightText: Copyright (c) 2017-2025 Pedro Costa and the CaNS contributors. All rights reserved.
 ! SPDX-License-Identifier: MIT
 !
 ! -
@@ -73,7 +73,7 @@ program cans
   use mod_solver         , only: solver
 #else
   use mod_solver_gpu     , only: solver => solver_gpu
-  use mod_workspaces     , only: init_wspace_arrays,set_cufft_wspace
+  use mod_workspaces     , only: init_wspace_arrays,set_cufft_wspace,cudecomp_finalize
   use mod_common_cudecomp, only: istream_acc_queue_1,ap_z_ptdma
 #endif
   use mod_timer          , only: timer_tic,timer_toc,timer_print
@@ -90,7 +90,7 @@ program cans
   real(rp), allocatable, dimension(:,:,:) :: dudtrko,dvdtrko,dwdtrko
   real(rp), dimension(0:1,3) :: tauxo,tauyo,tauzo
   real(rp), dimension(3) :: f
-#if !defined(_OPENACC)
+#if !defined(_OPENACC) || defined(_USE_HIP)
   type(C_PTR), dimension(2,2) :: arrplanp
 #else
   integer    , dimension(2,2) :: arrplanp
@@ -103,7 +103,7 @@ program cans
   real(rp) :: normfftp
   type(rhs_bound) :: rhsbp
   real(rp) :: alpha
-#if !defined(_OPENACC)
+#if !defined(_OPENACC) || defined(_USE_HIP)
   type(C_PTR), dimension(2,2) :: arrplanu,arrplanv,arrplanw
 #else
   integer    , dimension(2,2) :: arrplanu,arrplanv,arrplanw
@@ -630,5 +630,8 @@ program cans
   end if
   if(myid == 0.and.(.not.kill)) print*, '*** Fim ***'
   call decomp_2d_finalize
+#if defined(_OPENACC)
+  call cudecomp_finalize
+#endif
   call MPI_FINALIZE(ierr)
 end program cans

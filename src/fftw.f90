@@ -1,13 +1,34 @@
 ! -
 !
-! SPDX-FileCopyrightText: Copyright (c) 2017-2022 Pedro Costa and the CaNS contributors. All rights reserved.
+! SPDX-FileCopyrightText: Copyright (c) 2017-2025 Pedro Costa and the CaNS contributors. All rights reserved.
 ! SPDX-License-Identifier: MIT
 !
 ! -
 module mod_fftw_param
   use, intrinsic :: iso_c_binding
 #if defined(_OPENACC)
+#if !defined(_USE_HIP)
   use cufft
+#else
+  use hipfort_hipfft, only: CUFFT_R2C => HIPFFT_R2C, &
+                            CUFFT_C2R => HIPFFT_C2R, &
+                            CUFFT_D2Z => HIPFFT_D2Z, &
+                            CUFFT_Z2D => HIPFFT_Z2D, &
+                            cufftSetWorkArea       => hipfftSetWorkArea_, &
+                            cufftSetStream         => hipfftSetStream_, &
+                            cufftCreate            => hipfftCreate_, &
+                            cufftSetAutoAllocation => hipfftSetAutoAllocation_, &
+                            cufftMakePlanMany      => hipfftMakePlanMany_, &
+                            cufftDestroy           => hipfftDestroy_, &
+#if defined(_SINGLE_PRECISION)
+                            cufftExecR2C => hipfftExecR2C_, &
+                            cufftExecC2R => hipfftExecC2R_
+#else
+                            cufftExecD2Z => hipfftExecD2Z_, &
+                            cufftExecZ2D => hipfftExecZ2D_
+#endif
+  use hipfort       , only: hipDeviceSynchronize
+#endif
 #endif
   implicit none
   !

@@ -1,6 +1,6 @@
 ! -
 !
-! SPDX-FileCopyrightText: Copyright (c) 2017-2022 Pedro Costa and the CaNS contributors. All rights reserved.
+! SPDX-FileCopyrightText: Copyright (c) 2017-2025 Pedro Costa and the CaNS contributors. All rights reserved.
 ! SPDX-License-Identifier: MIT
 !
 ! -
@@ -26,7 +26,7 @@ module mod_initsolver
     real(rp), intent(out), dimension(lo_z(1):,lo_z(2):) :: lambdaxy
     character(len=1), intent(in), dimension(3) :: c_or_f
     real(rp), intent(out), dimension(lo_z(3):) :: a,b,c
-#if !defined(_OPENACC)
+#if !defined(_OPENACC) || defined(_USE_HIP)
     type(C_PTR), intent(out), dimension(2,2) :: arrplan
 #else
     integer    , intent(out), dimension(2,2) :: arrplan

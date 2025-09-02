@@ -1,6 +1,6 @@
 ! -
 !
-! SPDX-FileCopyrightText: Copyright (c) 2017-2022 Pedro Costa and the CaNS contributors. All rights reserved.
+! SPDX-FileCopyrightText: Copyright (c) 2017-2025 Pedro Costa and the CaNS contributors. All rights reserved.
 ! SPDX-License-Identifier: MIT
 !
 ! -
@@ -30,7 +30,7 @@ module mod_solve_helmholtz
     ! this is a wrapper subroutine to solve 1D/3D helmholtz problems: p/alpha + lap(p) = rhs
     !
     integer ,    intent(in   ), dimension(3)                :: n,ng,hi
-#if !defined(_OPENACC)
+#if !defined(_OPENACC) || defined(_USE_HIP)
     type(C_PTR), intent(in   ), dimension(2,2),    optional :: arrplan
 #else
     integer    , intent(in   ), dimension(2,2),    optional :: arrplan

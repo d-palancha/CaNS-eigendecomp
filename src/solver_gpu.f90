@@ -1,13 +1,17 @@
 ! -
 !
-! SPDX-FileCopyrightText: Copyright (c) 2017-2022 Pedro Costa and the CaNS contributors. All rights reserved.
+! SPDX-FileCopyrightText: Copyright (c) 2017-2025 Pedro Costa and the CaNS contributors. All rights reserved.
 ! SPDX-License-Identifier: MIT
 !
 ! -
 module mod_solver_gpu
 #if defined(_OPENACC)
   use, intrinsic :: iso_c_binding, only: C_PTR
+#if !defined(_USE_DIEZDECOMP)
   use cudecomp
+#else
+  use diezdecomp
+#endif
   use mod_common_cudecomp, only: dtype_rp => cudecomp_real_rp, &
                                  cudecomp_is_t_in_place, &
                                  solver_buf_0,solver_buf_1, &
@@ -15,11 +19,13 @@ module mod_solver_gpu
                                  ap_x   => ap_x_poi, &
                                  ap_y   => ap_y_poi, &
                                  ap_z   => ap_z_poi, &
+                                 ap_x_0 => ap_x    , &
                                  ap_z_0 => ap_z    , &
-                                 ch => handle,gd => gd_poi, &
-                                 istream => istream_acc_queue_1
+                                 ch => handle,gd => gd_poi, gd_io => gd_poi_io, &
+                                 istream => istream_acc_queue_1_comm_lib
   use mod_fft            , only: signal_processing,fftf_gpu,fftb_gpu
-  use mod_param          , only: ipencil_axis,is_poisson_pcr_tdma
+  use mod_param          , only: ipencil_axis,is_poisson_pcr_tdma, &
+                                 is_use_diezdecomp,is_diezdecomp_x2z_z2x_transposes
   use mod_types
   implicit none
   private
@@ -28,7 +34,11 @@ module mod_solver_gpu
   subroutine solver_gpu(n,ng,arrplan,normfft,lambdaxy,a,b,c,bc,c_or_f,p,is_ptdma_update,aa_z,cc_z)
     implicit none
     integer , intent(in), dimension(3) :: n,ng
-    integer , intent(in), dimension(2,2) :: arrplan
+#if !defined(_USE_HIP)
+    integer    , intent(in), dimension(2,2) :: arrplan
+#else
+    type(C_PTR), intent(in), dimension(2,2) :: arrplan
+#endif
     real(rp), intent(in) :: normfft
     real(rp), intent(in), dimension(:,:) :: lambdaxy
     real(rp), intent(in), dimension(:) :: a,b,c
@@ -40,7 +50,8 @@ module mod_solver_gpu
     real(rp), pointer, contiguous, dimension(:,:,:) :: px,py,pz
     integer :: i,j,k,q
     logical :: is_periodic_z
-    integer, dimension(3) :: n_x,n_y,n_z,n_z_0,lo_z_0,hi_z_0
+    integer, dimension(3) :: n_x,n_y,n_z,n_z_0,lo_z_0,hi_z_0,pad_io
+    type(cudecompPencilInfo) :: ap_io
     integer :: istat
     logical :: is_ptdma_update_
     real(rp) :: norm
@@ -79,44 +90,63 @@ module mod_solver_gpu
         end do
       end do
     case(2)
-      !
-      ! transpose p -> py to axis-contiguous layout
-      !
-      !$acc parallel loop collapse(3) default(present) async(1)
-      !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
-      do k=1,n(3)
-        do j=1,n(2)
-          do i=1,n(1)
-            py(j,k,i) = p(i,j,k)
-          end do
-        end do
-      end do
-      !$acc host_data use_device(py,px,work)
-      istat = cudecompTransposeYtoX(ch,gd,py,px,work,dtype_rp,stream=istream)
+      ap_io = ap_x_0
+      pad_io(:) = ap_x%shape(:) - ap_io%shape(:)
+#if !defined(_USE_DIEZDECOMP)
+      !$acc host_data use_device(p,px,work)
+#endif
+      istat = cudecompTransposeYtoX(ch,gd_io,p ,px,work,dtype_rp,input_halo_extents  = [1,1,1], &
+                                                                 output_halo_extents = [0,0,0], &
+                                                                 input_padding       = [0,0,0], &
+                                                                 output_padding      = pad_io, &
+                                                                 stream=istream)
+#if !defined(_USE_DIEZDECOMP)
       !$acc end host_data
+#endif
     case(3)
-      !$acc parallel loop collapse(3) default(present) async(1)
-      !$OMP parallel do   collapse(3) DEFAULT(shared)
-      do k=1,n(3)
-        do j=1,n(2)
-          do i=1,n(1)
-            pz(i,j,k) = p(i,j,k)
+      if(.not.is_diezdecomp_x2z_z2x_transposes) then
+        istat = cudecompGetPencilInfo(ch,gd_io,ap_io,2) ! mem_order = [2,3,1]
+        pad_io(:) = ap_y%shape(:) - ap_io%shape(:)
+#if !defined(_USE_DIEZDECOMP)
+        pad_io(ap_y%order(:)) = pad_io(:)
+        !$acc host_data use_device(p,py,px,work)
+#endif
+        istat = cudecompTransposeZtoY(ch,gd_io,p ,py,work,dtype_rp,input_halo_extents  = [1,1,1], &
+                                                                   output_halo_extents = [0,0,0], &
+                                                                   input_padding       = [0,0,0], &
+                                                                   output_padding      = pad_io, &
+                                                                   stream=istream)
+        istat = cudecompTransposeYtoX(ch,gd   ,py,px,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
+      !$acc end host_data
+#endif
+      else
+#if defined(_USE_DIEZDECOMP)
+        !$acc parallel loop collapse(3) default(present) async(1)
+        !$OMP parallel do   collapse(3) DEFAULT(shared)
+        do k=1,n(3)
+          do j=1,n(2)
+            do i=1,n(1)
+              pz(i,j,k) = p(i,j,k)
+            end do
           end do
         end do
-      end do
-      !$acc host_data use_device(pz,py,px,work)
-      istat = cudecompTransposeZtoY(ch,gd,pz,py,work,dtype_rp,stream=istream)
-      istat = cudecompTransposeYtoX(ch,gd,py,px,work,dtype_rp,stream=istream)
-      !$acc end host_data
+        istat = diezdecompTransposeZtoX(ch,gd,pz,px,work,dtype_rp,stream=istream)
+#endif
+      end if
     end select
     !
     call signal_processing(0,'F',bc(0,1)//bc(1,1),c_or_f(1),ng(1),n_x,1,px)
     call fftf_gpu(arrplan(1,1),px)
     call signal_processing(1,'F',bc(0,1)//bc(1,1),c_or_f(1),ng(1),n_x,1,px)
     !
+#if !defined(_USE_DIEZDECOMP)
     !$acc host_data use_device(px,py,work)
+#endif
     istat = cudecompTransposeXtoY(ch,gd,px,py,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
     !$acc end host_data
+#endif
     !
     call signal_processing(0,'F',bc(0,2)//bc(1,2),c_or_f(2),ng(2),n_y,1,py)
     call fftf_gpu(arrplan(1,2),py)
@@ -125,15 +155,23 @@ module mod_solver_gpu
     q = merge(1,0,c_or_f(3) == 'f'.and.bc(1,3) == 'D'.and.hi_z_0(3) == ng(3))
     is_periodic_z = bc(0,3)//bc(1,3) == 'PP'
     if(.not.is_poisson_pcr_tdma) then
+#if !defined(_USE_DIEZDECOMP)
       !$acc host_data use_device(py,pz,work)
+#endif
       istat = cudecompTransposeYtoZ(ch,gd,py,pz,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
       !$acc end host_data
+#endif
       !
       call gaussel_gpu(n_z_0(1),n_z_0(2),n_z_0(3)-q,0,a,b,c,is_periodic_z,norm,pz,work,pz_aux_1,lambdaxy)
       !
+#if !defined(_USE_DIEZDECOMP)
       !$acc host_data use_device(pz,py,work)
+#endif
       istat = cudecompTransposeZtoY(ch,gd,pz,py,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
       !$acc end host_data
+#endif
     else
       block
         use mod_common_cudecomp, only: ap_y
@@ -183,9 +221,13 @@ module mod_solver_gpu
     call fftb_gpu(arrplan(2,2),py)
     call signal_processing(1,'B',bc(0,2)//bc(1,2),c_or_f(2),ng(2),n_y,1,py)
     !
+#if !defined(_USE_DIEZDECOMP)
     !$acc host_data use_device(py,px,work)
+#endif
     istat = cudecompTransposeYtoX(ch,gd,py,px,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
     !$acc end host_data
+#endif
     !
     call signal_processing(0,'B',bc(0,1)//bc(1,1),c_or_f(1),ng(1),n_x,1,px)
     call fftb_gpu(arrplan(2,1),px)
@@ -203,35 +245,45 @@ module mod_solver_gpu
         end do
       end do
     case(2)
-      !$acc host_data use_device(px,py,work)
-      istat = cudecompTransposeXtoY(ch,gd,px,py,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
+      !$acc host_data use_device(px,p,work)
+#endif
+      istat = cudecompTransposeXtoY(ch,gd_io,px,p ,work,dtype_rp,input_halo_extents  = [0,0,0], &
+                                                                 output_halo_extents = [1,1,1], &
+                                                                 input_padding       = pad_io, &
+                                                                 output_padding      = [0,0,0], &
+                                                                 stream=istream)
+#if !defined(_USE_DIEZDECOMP)
       !$acc end host_data
-      !
-      ! transpose py -> p to default layout
-      !
-      !$acc parallel loop collapse(3) default(present) async(1)
-      !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
-      do k=1,n(3)
-        do j=1,n(2)
-          do i=1,n(1)
-            p(i,j,k) = py(j,k,i)
-          end do
-        end do
-      end do
+#endif
     case(3)
-      !$acc host_data use_device(px,py,pz,work)
-      istat = cudecompTransposeXtoY(ch,gd,px,py,work,dtype_rp,stream=istream)
-      istat = cudecompTransposeYtoZ(ch,gd,py,pz,work,dtype_rp,stream=istream)
+      if(.not.is_diezdecomp_x2z_z2x_transposes) then
+#if !defined(_USE_DIEZDECOMP)
+        !$acc host_data use_device(px,py,p,work)
+#endif
+        istat = cudecompTransposeXtoY(ch,gd   ,px,py,work,dtype_rp,stream=istream)
+        istat = cudecompTransposeYtoZ(ch,gd_io,py,p ,work,dtype_rp,input_halo_extents  = [0,0,0], &
+                                                                   output_halo_extents = [1,1,1], &
+                                                                   input_padding       = pad_io, &
+                                                                   output_padding      = [0,0,0], &
+                                                                   stream=istream)
+#if !defined(_USE_DIEZDECOMP)
       !$acc end host_data
-      !$acc parallel loop collapse(3) default(present) async(1)
-      !$OMP parallel do   collapse(3) DEFAULT(shared)
-      do k=1,n(3)
-        do j=1,n(2)
-          do i=1,n(1)
-            p(i,j,k) = pz(i,j,k)
+#endif
+      else
+#if defined(_USE_DIEZDECOMP)
+        istat = diezdecompTransposeXtoZ(ch,gd,px,pz,work,dtype_rp,stream=istream)
+        !$acc parallel loop collapse(3) default(present) async(1)
+        !$OMP parallel do   collapse(3) DEFAULT(shared)
+        do k=1,n(3)
+          do j=1,n(2)
+            do i=1,n(1)
+              p(i,j,k) = pz(i,j,k)
+            end do
           end do
         end do
-      end do
+#endif
+      end if
     end select
   end subroutine solver_gpu
   !
@@ -523,10 +575,14 @@ module mod_solver_gpu
     if(present(is_update) .and. present(aa_z_save) .and. present(cc_z_save)) then
       if(is_update) then
         is_update = .false.
+#if !defined(_USE_DIEZDECOMP)
         !$acc host_data use_device(aa_y,cc_y,aa_z_save,cc_z_save,work)
+#endif
         istat = cudecompTransposeYtoZ(ch,gd_ptdma,aa_y,aa_z_save,work,dtype_rp,stream=istream)
         istat = cudecompTransposeYtoZ(ch,gd_ptdma,cc_y,cc_z_save,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
         !$acc end host_data
+#endif
       end if
       !$acc parallel loop collapse(3) default(present) async(1)
       do k=1,nn
@@ -538,14 +594,22 @@ module mod_solver_gpu
         end do
       end do
     else
+#if !defined(_USE_DIEZDECOMP)
       !$acc host_data use_device(aa_y,cc_y,aa_z,cc_z,work)
+#endif
       istat = cudecompTransposeYtoZ(ch,gd_ptdma,aa_y,aa_z,work,dtype_rp,stream=istream)
       istat = cudecompTransposeYtoZ(ch,gd_ptdma,cc_y,cc_z,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
       !$acc end host_data
+#endif
     end if
+#if !defined(_USE_DIEZDECOMP)
     !$acc host_data use_device(pp_y,pp_z,work)
+#endif
     istat = cudecompTransposeYtoZ(ch,gd_ptdma,pp_y,pp_z,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
     !$acc end host_data
+#endif
     !
     ! solve reduced systems
     !
@@ -611,9 +675,13 @@ module mod_solver_gpu
     !
     ! transpose solution to the original z-distributed form
     !
+#if !defined(_USE_DIEZDECOMP)
     !$acc host_data use_device(pp_z,pp_y,work)
+#endif
     istat = cudecompTransposeZtoY(ch,gd_ptdma,pp_z,pp_y,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
     !$acc end host_data
+#endif
     !
     ! obtain final solution on the inner points
     !
@@ -812,10 +880,20 @@ module mod_solver_gpu
       end do
     end do
     !
+#if !defined(_USE_DIEZDECOMP)
     !$acc host_data use_device(pp_x,pp_y,pp_z,work)
-    istat = cudecompTransposeXtoY(ch,gd_ptdma,pp_x,pp_y,work,dtype_rp,stream=istream)
-    istat = cudecompTransposeYtoZ(ch,gd_ptdma,pp_y,pp_z,work,dtype_rp,stream=istream)
+#endif
+    if(.not.is_diezdecomp_x2z_z2x_transposes) then
+      istat = cudecompTransposeXtoY(ch,gd_ptdma,pp_x,pp_y,work,dtype_rp,stream=istream)
+      istat = cudecompTransposeYtoZ(ch,gd_ptdma,pp_y,pp_z,work,dtype_rp,stream=istream)
+    else
+#if defined(_USE_DIEZDECOMP)
+      istat = diezdecompTransposeXtoZ(ch,gd_ptdma,pp_x,pp_z,work,dtype_rp,stream=istream)
+#endif
+    end if
+#if !defined(_USE_DIEZDECOMP)
     !$acc end host_data
+#endif
     !
     !$acc parallel loop gang vector collapse(2) default(present) async(1)
     do j=1,ny_r
@@ -847,10 +925,20 @@ module mod_solver_gpu
       end do
     end if
     !
+#if !defined(_USE_DIEZDECOMP)
     !$acc host_data use_device(pp_z,pp_y,pp_x,work)
-    istat = cudecompTransposeZtoY(ch,gd_ptdma,pp_z,pp_y,work,dtype_rp,stream=istream)
-    istat = cudecompTransposeYtoX(ch,gd_ptdma,pp_y,pp_x,work,dtype_rp,stream=istream)
+#endif
+    if(.not.is_diezdecomp_x2z_z2x_transposes) then
+      istat = cudecompTransposeZtoY(ch,gd_ptdma,pp_z,pp_y,work,dtype_rp,stream=istream)
+      istat = cudecompTransposeYtoX(ch,gd_ptdma,pp_y,pp_x,work,dtype_rp,stream=istream)
+    else
+#if defined(_USE_DIEZDECOMP)
+      istat = diezdecompTransposeZtoX(ch,gd_ptdma,pp_z,pp_x,work,dtype_rp,stream=istream)
+#endif
+    end if
+#if !defined(_USE_DIEZDECOMP)
     !$acc end host_data
+#endif
     !
     !$acc parallel loop gang vector collapse(2) default(present) async(1)
     do j=1,ny
@@ -869,6 +957,7 @@ module mod_solver_gpu
       end do
     end do
   end subroutine gaussel_ptdma_gpu_fast_1d
+  !
   subroutine solver_gaussel_z_gpu(n,ng,hi,a,b,c,bcz,c_or_f,norm,p)
     use mod_param, only: eps
     implicit none
@@ -906,20 +995,36 @@ module mod_solver_gpu
       !
       if(.not.is_no_decomp_z) then
         select case(ipencil_axis)
+        !
+        ! n.b.: since x- and y-aligned partitions are anyway sub-optimal with z-implicit diffusion,
+        !       the first transposes below are not optimized to skip the copy of the
+        !       input array `p` to `px`/`py`, as done above in `solver_gpu()`;
+        !       the same holds for the reciprocate operations after the solution is obtained
+        !
         case(1)
-           !$acc parallel loop collapse(3) default(present) async(1)
-           !$OMP parallel do   collapse(3) DEFAULT(shared)
-           do k=1,n(3)
-             do j=1,n(2)
-               do i=1,n(1)
-                 px(i,j,k) = p(i,j,k)
-               end do
-             end do
-           end do
+          !$acc parallel loop collapse(3) default(present) async(1)
+          !$OMP parallel do   collapse(3) DEFAULT(shared)
+          do k=1,n(3)
+            do j=1,n(2)
+              do i=1,n(1)
+                px(i,j,k) = p(i,j,k)
+              end do
+            end do
+          end do
+#if !defined(_USE_DIEZDECOMP)
           !$acc host_data use_device(px,py,pz,work)
-          istat = cudecompTransposeXtoY(ch,gd,px,py,work,dtype_rp,stream=istream)
-          istat = cudecompTransposeYtoZ(ch,gd,py,pz,work,dtype_rp,stream=istream)
+#endif
+          if(.not.is_diezdecomp_x2z_z2x_transposes) then
+            istat = cudecompTransposeXtoY(ch,gd,px,py,work,dtype_rp,stream=istream)
+            istat = cudecompTransposeYtoZ(ch,gd,py,pz,work,dtype_rp,stream=istream)
+          else
+#if defined(_USE_DIEZDECOMP)
+            istat = diezdecompTransposeXtoZ(ch,gd,px,pz,work,dtype_rp,stream=istream)
+#endif
+          end if
+#if !defined(_USE_DIEZDECOMP)
           !$acc end host_data
+#endif
         case(2)
           !
           ! transpose p -> py to axis-contiguous layout
@@ -933,9 +1038,13 @@ module mod_solver_gpu
               end do
             end do
           end do
+#if !defined(_USE_DIEZDECOMP)
           !$acc host_data use_device(py,pz,work)
+#endif
           istat = cudecompTransposeYtoZ(ch,gd,py,pz,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
           !$acc end host_data
+#endif
         case(3)
         end select
       end if
@@ -956,10 +1065,20 @@ module mod_solver_gpu
     if(.not.is_poisson_pcr_tdma .and. .not.is_no_decomp_z) then
       select case(ipencil_axis)
       case(1)
+#if !defined(_USE_DIEZDECOMP)
         !$acc host_data use_device(pz,py,px,work)
-        istat = cudecompTransposeZtoY(ch,gd,pz,py,work,dtype_rp,stream=istream)
-        istat = cudecompTransposeYtoX(ch,gd,py,px,work,dtype_rp,stream=istream)
+#endif
+        if(.not.is_diezdecomp_x2z_z2x_transposes) then
+          istat = cudecompTransposeZtoY(ch,gd,pz,py,work,dtype_rp,stream=istream)
+          istat = cudecompTransposeYtoX(ch,gd,py,px,work,dtype_rp,stream=istream)
+        else
+#if defined(_USE_DIEZDECOMP)
+          istat = diezdecompTransposeZtoX(ch,gd,pz,px,work,dtype_rp,stream=istream)
+#endif
+        end if
+#if !defined(_USE_DIEZDECOMP)
         !$acc end host_data
+#endif
         !$acc parallel loop collapse(3) default(present) async(1)
         !$OMP parallel do   collapse(3) DEFAULT(shared)
         do k=1,n(3)
@@ -970,9 +1089,13 @@ module mod_solver_gpu
           end do
         end do
       case(2)
+#if !defined(_USE_DIEZDECOMP)
         !$acc host_data use_device(pz,py,work)
+#endif
         istat = cudecompTransposeZtoY(ch,gd,pz,py,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
         !$acc end host_data
+#endif
         !
         ! transpose py -> p to default layout
         !
@@ -1088,11 +1211,15 @@ module mod_solver_gpu
         end do
       end do
       !
+#if !defined(_USE_DIEZDECOMP)
       !$acc host_data use_device(aa_y,bb_y,cc_y,aa_z,bb_z,cc_z,work)
+#endif
       istat = cudecompTransposeYtoZ(ch,gd_ptdma,aa_y,aa_z,work,dtype_rp,stream=istream)
       istat = cudecompTransposeYtoZ(ch,gd_ptdma,bb_y,bb_z,work,dtype_rp,stream=istream)
       istat = cudecompTransposeYtoZ(ch,gd_ptdma,cc_y,cc_z,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
       !$acc end host_data
+#endif
       !
       if(is_periodic) then
         !$acc parallel loop collapse(3) default(present) async(1)
@@ -1176,9 +1303,13 @@ module mod_solver_gpu
       end do
     end do
     !
+#if !defined(_USE_DIEZDECOMP)
     !$acc host_data use_device(pp_y,pp_z,work)
+#endif
     istat = cudecompTransposeYtoZ(ch,gd_ptdma,pp_y,pp_z,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
     !$acc end host_data
+#endif
     !
     !$acc parallel loop gang vector collapse(2) default(present) async(1)
     do j=1,ny_r
@@ -1210,9 +1341,13 @@ module mod_solver_gpu
       end do
     end if
     !
+#if !defined(_USE_DIEZDECOMP)
     !$acc host_data use_device(pp_z,pp_y,work)
+#endif
     istat = cudecompTransposeZtoY(ch,gd_ptdma,pp_z,pp_y,work,dtype_rp,stream=istream)
+#if !defined(_USE_DIEZDECOMP)
     !$acc end host_data
+#endif
     !
     !$acc parallel loop gang vector collapse(2) default(present) async(1)
     do j=1,ny
