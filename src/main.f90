@@ -255,7 +255,6 @@ program cans
     call user_mesh(mesh_input, is_cell_length, ng, l, dl, dli, z_g, dz_g, dzi_g)
   end if
   !
-  do i = 1,3 
   call initgrid(gtype,ng(3),gr,l(3),dzc_g,dzf_g,zc_g,zf_g)
   if(myid == 0) then
     open(99,file=trim(datadir)//'grid.bin',action='write',form='unformatted',access='stream',status='replace')
