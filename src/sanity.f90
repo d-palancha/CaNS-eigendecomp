@@ -201,7 +201,8 @@ module mod_sanity
     print*, 'ERROR: Flow cannot be forced in a non-periodic direction; check the BCs and is_forced in `input.nml`.'
   end subroutine chk_forcing
   !
-  subroutine test_sanity_solver(ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z,dli,dzc,dzf,dzci,dzfi,dzci_g,dzfi_g, &
+  subroutine test_sanity_solver(ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z,dli, &
+                                dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi,dzci_g,dzfi_g, &
                                 nb,is_bound,cbcvel,cbcpre,bcvel,bcpre)
 #if defined(_OPENACC)
     use mod_workspaces     , only: set_cufft_wspace
@@ -210,7 +211,7 @@ module mod_sanity
     implicit none
     integer , intent(in), dimension(3) :: ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z
     real(rp), intent(in), dimension(3) :: dli
-    real(rp), intent(in), dimension(0:) :: dzc,dzf,dzci,dzfi,dzci_g,dzfi_g
+    real(rp), intent(in), dimension(0:) :: dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi,dzci_g,dzfi_g
     integer , intent(in), dimension(0:1,3) :: nb
     logical , intent(in), dimension(0:1,3) :: is_bound
     character(len=1), intent(in), dimension(0:1,3,3) :: cbcvel
@@ -267,14 +268,14 @@ module mod_sanity
     dl  = dli**(-1)
     dt  = acos(-1.) ! value is irrelevant
     dti = dt**(-1)
-    call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
-    call fillps(n,dli,dzfi,dti,u,v,w,p)
+    call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
+    call fillps(n,dxfi,dyfi,dzfi,dti,u,v,w,p)
     call updt_rhs_b(['c','c','c'],cbcpre,n,is_bound,rhsbx,rhsby,rhsbz,p)
     call solver(n,ng,arrplan,normfft,lambdaxy,a,b,c,cbcpre,['c','c','c'],p)
-    call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,p)
-    call correc(n,dli,dzci,dt,p,u,v,w)
-    call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dl,dzc,dzf,u,v,w)
-    call chkdiv(lo,hi,dli,dzfi,u,v,w,divtot,divmax)
+    call boundp(cbcpre,n,bcpre,nb,is_bound,dxc,dyc,dzc,p)
+    call correc(n,dxci,dyci,dzci,dt,p,u,v,w)
+    call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
+    call chkdiv(lo,hi,dxfi,dyfi,dzfi,u,v,w,divtot,divmax)
     passed_loc = divmax < small
     if(myid == 0.and.(.not.passed_loc)) &
     print*, 'ERROR: Pressure correction: Divergence is too large, with maximum = ', divmax
@@ -306,7 +307,7 @@ module mod_sanity
 #if defined(_OPENACC)
       call set_cufft_wspace(pack(arrplan,.true.),istream_acc_queue_1)
 #endif
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
       !$acc parallel loop collapse(3) default(present)
       !$OMP parallel do   collapse(3) DEFAULT(shared)
       do k=0,n(3)+1
@@ -325,8 +326,8 @@ module mod_sanity
       call updt_rhs_b(['f','c','c'],cbcvel(:,:,1),n,is_bound,rhsbx,rhsby,rhsbz,u)
       call solver(n,ng,arrplan,normfft,lambdaxy,a,bb,c,cbcvel(:,:,1),['f','c','c'],u)
       call fftend(arrplan)
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in u
-      call chk_helmholtz(lo,hi,dli,dzci,dzfi,alpha,p,u,cbcvel(:,:,1),is_bound,['f','c','c'],resmax)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in u
+      call chk_helmholtz(lo,hi,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,p,u,cbcvel(:,:,1),is_bound,['f','c','c'],resmax)
       passed_loc = resmax < small
       if(myid == 0.and.(.not.passed_loc)) &
       print*, 'ERROR: wrong solution of Helmholtz equation in x direction.'
@@ -338,7 +339,7 @@ module mod_sanity
 #if defined(_OPENACC)
       call set_cufft_wspace(pack(arrplan,.true.),istream_acc_queue_1)
 #endif
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
       !$acc parallel loop collapse(3) default(present)
       !$OMP parallel do   collapse(3) DEFAULT(shared)
       do k=0,n(3)+1
@@ -357,8 +358,8 @@ module mod_sanity
       call updt_rhs_b(['c','f','c'],cbcvel(:,:,2),n,is_bound,rhsbx,rhsby,rhsbz,v)
       call solver(n,ng,arrplan,normfft,lambdaxy,a,bb,c,cbcvel(:,:,2),['c','f','c'],v)
       call fftend(arrplan)
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in v
-      call chk_helmholtz(lo,hi,dli,dzci,dzfi,alpha,p,v,cbcvel(:,:,2),is_bound,['c','f','c'],resmax)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in v
+      call chk_helmholtz(lo,hi,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,p,v,cbcvel(:,:,2),is_bound,['c','f','c'],resmax)
       passed_loc = resmax < small
       if(myid == 0.and.(.not.passed_loc)) &
       print*, 'ERROR: wrong solution of Helmholtz equation in y direction.'
@@ -370,7 +371,7 @@ module mod_sanity
 #if defined(_OPENACC)
       call set_cufft_wspace(pack(arrplan,.true.),istream_acc_queue_1)
 #endif
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
       !$acc parallel loop collapse(3) default(present)
       !$OMP parallel do   collapse(3) DEFAULT(shared)
       do k=0,n(3)+1
@@ -389,8 +390,8 @@ module mod_sanity
       call updt_rhs_b(['c','c','f'],cbcvel(:,:,3),n,is_bound,rhsbx,rhsby,rhsbz,w)
       call solver(n,ng,arrplan,normfft,lambdaxy,a,bb,c,cbcvel(:,:,3),['c','c','f'],w)
       call fftend(arrplan)
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in w
-      call chk_helmholtz(lo,hi,dli,dzci,dzfi,alpha,p,w,cbcvel(:,:,3),is_bound,['c','c','f'],resmax)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in w
+      call chk_helmholtz(lo,hi,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,p,w,cbcvel(:,:,3),is_bound,['c','c','f'],resmax)
       passed_loc = resmax < small
       if(myid == 0.and.(.not.passed_loc)) &
       print*, 'ERROR: wrong solution of Helmholtz equation in z direction.'

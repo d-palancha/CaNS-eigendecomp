@@ -12,7 +12,7 @@ module mod_utils
   public device_memory_footprint
 #endif
 contains
-  subroutine bulk_mean(n,grid_vol_ratio,p,mean)
+  subroutine bulk_mean(n,dl_li_x,dl_li_y,dl_li_z,p,mean)
     !
     ! compute the mean value of an observable over the entire domain
     !
@@ -20,7 +20,7 @@ contains
     use mod_types
     implicit none
     integer , intent(in), dimension(3) :: n
-    real(rp), intent(in), dimension(0:) :: grid_vol_ratio
+    real(rp), intent(in), dimension(0:) :: dl_li_x,dl_li_y,dl_li_z
     real(rp), intent(in), dimension(0:,0:,0:) :: p
     real(rp), intent(out) :: mean
     integer :: i,j,k
@@ -32,7 +32,7 @@ contains
     do k=1,n(3)
       do j=1,n(2)
         do i=1,n(1)
-          mean = mean + p(i,j,k)*grid_vol_ratio(k)
+          mean = mean + p(i,j,k)*dl_li_x(i)*dl_li_y(j)*dl_li_z(k)
         end do
       end do
     end do

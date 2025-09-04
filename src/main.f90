@@ -115,9 +115,15 @@ program cans
   !
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
   integer :: irk,istep
-  real(rp), allocatable, dimension(:) :: dzc  ,dzf  ,zc  ,zf  ,dzci  ,dzfi, &
+  real(rp), allocatable, dimension(:) :: dxc  ,dxf  ,xc  ,xf  ,dxci  ,dxfi, &
+                                         dxc_g,dxf_g,xc_g,xf_g,dxci_g,dxfi_g, &
+                                         dyc  ,dyf  ,yc  ,yf  ,dyci  ,dyfi, &
+                                         dyc_g,dyf_g,yc_g,yf_g,dyci_g,dyfi_g, &
+                                         dzc  ,dzf  ,zc  ,zf  ,dzci  ,dzfi, &
                                          dzc_g,dzf_g,zc_g,zf_g,dzci_g,dzfi_g, &
-                                         grid_vol_ratio_c,grid_vol_ratio_f
+                                         dlc_li_x,dlf_li_x, &
+                                         dlc_li_y,dlf_li_y, &
+                                         dlc_li_z,dlf_li_z
   real(rp) :: meanvelu,meanvelv,meanvelw
   real(rp), dimension(3) :: dpdl
   !
@@ -143,7 +149,7 @@ program cans
   end type arr_ptr
   type(arr_ptr)    , allocatable, dimension(:) ::   io_vars
   character(len=10), allocatable, dimension(:) :: c_io_vars
-  integer :: k,kk
+  integer :: q,qq
   logical :: is_done,kill
   !
   call MPI_INIT(ierr)
@@ -181,20 +187,30 @@ program cans
     allocate(ap_d(n_z_d(1),n_z_d(2),n_z_d(3)), &
              cp_d(n_z_d(1),n_z_d(2),n_z_d(3)))
   end if
-  allocate(dzc( 0:n(3)+1), &
-           dzf( 0:n(3)+1), &
-           zc(  0:n(3)+1), &
-           zf(  0:n(3)+1), &
-           dzci(0:n(3)+1), &
-           dzfi(0:n(3)+1))
-  allocate(dzc_g( 0:ng(3)+1), &
-           dzf_g( 0:ng(3)+1), &
-           zc_g(  0:ng(3)+1), &
-           zf_g(  0:ng(3)+1), &
-           dzci_g(0:ng(3)+1), &
-           dzfi_g(0:ng(3)+1))
-  allocate(grid_vol_ratio_c,mold=dzc)
-  allocate(grid_vol_ratio_f,mold=dzf)
+  allocate(dxc( 0:n(1)+1),dxf( 0:n(1)+1), &
+           xc(  0:n(1)+1),xf(  0:n(1)+1), &
+           dxci(0:n(1)+1),dxfi(0:n(1)+1), &
+           dyc( 0:n(2)+1),dyf( 0:n(2)+1), &
+           yc(  0:n(2)+1),yf(  0:n(2)+1), &
+           dyci(0:n(2)+1),dyfi(0:n(2)+1), &
+           dzc( 0:n(3)+1),dzf( 0:n(3)+1), &
+           zc(  0:n(3)+1),zf(  0:n(3)+1), &
+           dzci(0:n(3)+1),dzfi(0:n(3)+1))
+  allocate(dxc_g( 0:ng(1)+1),dxf_g( 0:ng(1)+1), &
+           xc_g(  0:ng(1)+1),xf_g(  0:ng(1)+1), &
+           dxci_g(0:ng(1)+1),dxfi_g(0:ng(1)+1), &
+           dyc_g( 0:ng(2)+1),dyf_g( 0:ng(2)+1), &
+           yc_g(  0:ng(2)+1),yf_g(  0:ng(2)+1), &
+           dyci_g(0:ng(2)+1),dyfi_g(0:ng(2)+1), &
+           dzc_g( 0:ng(3)+1),dzf_g( 0:ng(3)+1), &
+           zc_g(  0:ng(3)+1),zf_g(  0:ng(3)+1), &
+           dzci_g(0:ng(3)+1),dzfi_g(0:ng(3)+1))
+  allocate(dlc_li_x,mold=dxc)
+  allocate(dlf_li_x,mold=dxc)
+  allocate(dlc_li_y,mold=dyc)
+  allocate(dlf_li_y,mold=dyc)
+  allocate(dlc_li_z,mold=dzc)
+  allocate(dlf_li_z,mold=dzc)
   allocate(rhsbp%x(n(2),n(3),0:1), &
            rhsbp%y(n(1),n(3),0:1), &
            rhsbp%z(n(1),n(2),0:1))
@@ -236,14 +252,32 @@ program cans
   if(myid == 0) print*, '*** Beginning of simulation ***'
   if(myid == 0) print*, '*******************************'
   if(myid == 0) print*, ''
+  call initgrid(gtype(1),ng(1),gr(1),l(1),dxc_g,dxf_g,xc_g,xf_g)
+  call initgrid(gtype(2),ng(2),gr(2),l(2),dyc_g,dyf_g,yc_g,yf_g)
   call initgrid(gtype(3),ng(3),gr(3),l(3),dzc_g,dzf_g,zc_g,zf_g)
   if(myid == 0) then
-    open(99,file=trim(datadir)//'grid.bin',action='write',form='unformatted',access='stream',status='replace')
+    open(99,file=trim(datadir)//'grid_x.bin',action='write',form='unformatted',access='stream',status='replace')
+    write(99) dxc_g(1:ng(1)),dxf_g(1:ng(1)),xc_g(1:ng(1)),xf_g(1:ng(1))
+    close(99)
+    open(99,file=trim(datadir)//'grid_y.bin',action='write',form='unformatted',access='stream',status='replace')
+    write(99) dyc_g(1:ng(2)),dyf_g(1:ng(2)),yc_g(1:ng(2)),yf_g(1:ng(2))
+    close(99)
+    open(99,file=trim(datadir)//'grid_z.bin',action='write',form='unformatted',access='stream',status='replace')
     write(99) dzc_g(1:ng(3)),dzf_g(1:ng(3)),zc_g(1:ng(3)),zf_g(1:ng(3))
     close(99)
-    open(99,file=trim(datadir)//'grid.out')
-    do kk=0,ng(3)+1
-      write(99,*) 0.,zf_g(kk),zc_g(kk),dzf_g(kk),dzc_g(kk)
+    open(99,file=trim(datadir)//'grid_x.out')
+    do qq=0,ng(1)+1
+      write(99,*) 0.,xf_g(qq),xc_g(qq),dxf_g(qq),dxc_g(qq)
+    end do
+    close(99)
+    open(99,file=trim(datadir)//'grid_y.out')
+    do qq=0,ng(2)+1
+      write(99,*) 0.,yf_g(qq),yc_g(qq),dyf_g(qq),dyc_g(qq)
+    end do
+    close(99)
+    open(99,file=trim(datadir)//'grid_z.out')
+    do qq=0,ng(3)+1
+      write(99,*) 0.,zf_g(qq),zc_g(qq),dzf_g(qq),dzc_g(qq)
     end do
     close(99)
     open(99,file=trim(datadir)//'geometry.out')
@@ -252,34 +286,85 @@ program cans
     close(99)
   end if
   !$acc enter data copyin(lo,hi,n) async
-  !$acc enter data copyin(bforce,dl,dli,l) async
+  !$acc enter data copyin(bforce,l) async
   !$acc enter data copyin(gacc) async
+  !$acc enter data copyin(dl,dli) async
+  !$acc enter data copyin(xc_g,xf_g,dxc_g,dxf_g) async
+  !$acc enter data create(xc,xf,dxc,dxf,dxci,dxfi,dxci_g,dxfi_g) async
+  !$acc enter data copyin(yc_g,yf_g,dyc_g,dyf_g) async
+  !$acc enter data create(yc,yf,dyc,dyf,dyci,dyfi,dyci_g,dyfi_g) async
   !$acc enter data copyin(zc_g,zf_g,dzc_g,dzf_g) async
   !$acc enter data create(zc,zf,dzc,dzf,dzci,dzfi,dzci_g,dzfi_g) async
   !
-  !$acc parallel loop default(present) private(k) async
-  do kk=lo(3)-1,hi(3)+1
-    k = kk-(lo(3)-1)
-    zc( k) = zc_g(kk)
-    zf( k) = zf_g(kk)
-    dzc(k) = dzc_g(kk)
-    dzf(k) = dzf_g(kk)
-    dzci(k) = dzc(k)**(-1)
-    dzfi(k) = dzf(k)**(-1)
+  !$acc parallel loop default(present) private(q) async
+  do qq=lo(1)-1,hi(1)+1
+    q = qq-(lo(1)-1)
+    xc( q) = xc_g(qq)
+    xf( q) = xf_g(qq)
+    dxc(q) = dxc_g(qq)
+    dxf(q) = dxf_g(qq)
+    dxci(q) = dxc(q)**(-1)
+    dxfi(q) = dxf(q)**(-1)
+  end do
+  !$acc parallel loop default(present) private(q) async
+  do qq=lo(2)-1,hi(2)+1
+    q = qq-(lo(2)-1)
+    yc( q) = yc_g(qq)
+    yf( q) = yf_g(qq)
+    dyc(q) = dyc_g(qq)
+    dyf(q) = dyf_g(qq)
+    dyci(q) = dyc(q)**(-1)
+    dyfi(q) = dyf(q)**(-1)
+  end do
+  !$acc parallel loop default(present) private(q) async
+  do qq=lo(3)-1,hi(3)+1
+    q = qq-(lo(3)-1)
+    zc( q) = zc_g(qq)
+    zf( q) = zf_g(qq)
+    dzc(q) = dzc_g(qq)
+    dzf(q) = dzf_g(qq)
+    dzci(q) = dzc(q)**(-1)
+    dzfi(q) = dzf(q)**(-1)
   end do
   !$acc data copy(ng) async
   !$acc parallel loop default(present) async
-  do k=0,ng(3)+1
-    dzci_g(k) = dzc_g(k)**(-1)
-    dzfi_g(k) = dzf_g(k)**(-1)
+  do q=0,ng(1)+1
+    dxci_g(q) = dxc_g(q)**(-1)
+    dxfi_g(q) = dxf_g(q)**(-1)
+  end do
+  !$acc parallel loop default(present) async
+  do q=0,ng(2)+1
+    dyci_g(q) = dyc_g(q)**(-1)
+    dyfi_g(q) = dyf_g(q)**(-1)
+  end do
+  !$acc parallel loop default(present) async
+  do q=0,ng(3)+1
+    dzci_g(q) = dzc_g(q)**(-1)
+    dzfi_g(q) = dzf_g(q)**(-1)
   end do
   !$acc end data
-  !$acc enter data create(grid_vol_ratio_c,grid_vol_ratio_f) async
+  !$acc enter data create(dlc_li_x,dlf_li_x) async
+  !$acc enter data create(dlc_li_y,dlf_li_y) async
+  !$acc enter data create(dlc_li_z,dlf_li_z) async
   !$acc parallel loop default(present) async
-  do k=0,n(3)+1
-    grid_vol_ratio_c(k) = dl(1)*dl(2)*dzc(k)/(l(1)*l(2)*l(3))
-    grid_vol_ratio_f(k) = dl(1)*dl(2)*dzf(k)/(l(1)*l(2)*l(3))
+  do q=0,n(1)+1
+    dlc_li_x(q) = dxc(q)/l(1)
+    dlf_li_x(q) = dxf(q)/l(1)
   end do
+  !$acc parallel loop default(present) async
+  do q=0,n(2)+1
+    dlc_li_y(q) = dyc(q)/l(2)
+    dlf_li_y(q) = dyf(q)/l(2)
+  end do
+  !$acc parallel loop default(present) async
+  do q=0,n(3)+1
+    dlc_li_z(q) = dzc(q)/l(3)
+    dlf_li_z(q) = dzf(q)/l(3)
+  end do
+  !$acc update self(xc,xf,dxc,dxf,dxci,dxfi) async
+  !$acc exit data copyout(xc_g,xf_g,dxc_g,dxf_g,dxci_g,dxfi_g) async ! not needed on the device
+  !$acc update self(yc,yf,dyc,dyf,dyci,dyfi) async
+  !$acc exit data copyout(yc_g,yf_g,dyc_g,dyf_g,dyci_g,dyfi_g) async ! not needed on the device
   !$acc update self(zc,zf,dzc,dzf,dzci,dzfi) async
   !$acc exit data copyout(zc_g,zf_g,dzc_g,dzf_g,dzci_g,dzfi_g) async ! not needed on the device
   !$acc wait
@@ -350,7 +435,8 @@ program cans
                   device_memory_footprint(n,n_z,nscal)/(1._sp*1024**3), ' ***'
 #endif
   if(is_debug_poisson) then
-    call test_sanity_solver(ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z,dli,dzc,dzf,dzci,dzfi,dzci_g,dzfi_g, &
+    call test_sanity_solver(ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z,dli, &
+                            dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi,dzci_g,dzfi_g, &
                             nb,is_bound,cbcvel,cbcpre,bcvel,bcpre)
   end if
   !
@@ -369,10 +455,10 @@ program cans
   if(.not.restart) then
     istep = 0
     time = 0.
-    call initflow(inivel,bcvel,ng,lo,l,dl,zc,zf,dzc,dzf,visc,is_forced,velf,bforce,is_wallturb,u,v,w,p)
+    call initflow(inivel,bcvel,ng,lo,l,xc,xf,yc,yf,zc,zf,dxc,dxf,dyc,dyf,dzc,dzf,visc,is_forced,velf,bforce,is_wallturb,u,v,w,p)
     do iscal=1,nscal
       s => scalars(iscal)
-      call initscal(s%ini,s%bc,ng,lo,l,dl,zc,dzf,s%alpha,s%is_forced,s%scalf,s%val)
+      call initscal(s%ini,s%bc,ng,lo,l,xc,xf,yc,yf,zc,zf,dxc,dxf,dyc,dyf,dzc,dzf,s%alpha,s%is_forced,s%scalf,s%val)
     end do
     if(myid == 0) print*, '*** Initial condition succesfully set ***'
   else
@@ -383,12 +469,12 @@ program cans
     if(myid == 0) print*, '*** Checkpoint loaded at time = ', time, 'time step = ', istep, '. ***'
   end if
   !$acc enter data copyin(u,v,w,p,dudtrko,dvdtrko,dwdtrko) create(pp)
-  call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
-  call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,p)
+  call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
+  call boundp(cbcpre,n,bcpre,nb,is_bound,dxc,dyc,dzc,p)
   do iscal=1,nscal
     s => scalars(iscal)
     !$acc enter data copyin(s%val,s%dsdtrko) async(1)
-    call boundp(s%cbc,n,s%bc,nb,is_bound,dl,dzc,s%val)
+    call boundp(s%cbc,n,s%bc,nb,is_bound,dxc,dyc,dzc,s%val)
   end do
   !$acc wait
   !
@@ -410,7 +496,7 @@ program cans
     include 'out3d.h90'
   end if
   !
-  call chkdt(n,dl,dzci,dzfi,visc,alpha_max,u,v,w,dt_cfl)
+  call chkdt(n,dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,alpha_max,u,v,w,dt_cfl)
   dt = merge(dt_f,min(cfl*dt_cfl,dtmax),dt_f > 0.)
   if(myid == 0) print*, 'dt_cfl = ', dt_cfl, 'dt = ', dt
   dti = 1./dt
@@ -436,18 +522,18 @@ program cans
       dtrki = dtrk**(-1)
       do iscal=1,nscal
         s => scalars(iscal)
-        call rk_scal(rkcoeff(:,irk),n,dli,l,dzci,dzfi,grid_vol_ratio_f,s%alpha,dt,is_bound,u,v,w, &
-                     s%is_forced,s%scalf,s%source,s%fluxo,s%dsdtrko,s%val,s%f)
+        call rk_scal(rkcoeff(:,irk),n,l,dxci,dxfi,dyci,dyfi,dzci,dzfi,dlf_li_x,dlf_li_y,dlf_li_z, &
+                     s%alpha,dt,is_bound,u,v,w,s%is_forced,s%scalf,s%source,s%fluxo,s%dsdtrko,s%val,s%f)
         call bulk_forcing_s(n,s%is_forced,s%f,s%val)
         fs(iscal) = fs(iscal) + s%f
         if(is_impdiff) then
           call solve_helmholtz(n,ng,hi,s%arrplan,s%normfft,-0.5*s%alpha*dtrk, &
                                s%lambdaxy,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound,s%cbc,['c','c','c'],s%val)
         end if
-        call boundp(s%cbc,n,s%bc,nb,is_bound,dl,dzc,s%val)
+        call boundp(s%cbc,n,s%bc,nb,is_bound,dxc,dyc,dzc,s%val)
       end do
-      call rk(rkcoeff(:,irk),n,dli,dzci,dzfi,grid_vol_ratio_c,grid_vol_ratio_f,visc,dt,p, &
-              is_forced,velf,bforce,gacc,beta,scalars,dudtrko,dvdtrko,dwdtrko,u,v,w,f)
+      call rk(rkcoeff(:,irk),n,dxci,dxfi,dyci,dyfi,dzci,dzfi,dlc_li_x,dlf_li_x,dlc_li_y,dlf_li_y,dlc_li_z,dlf_li_z, &
+              visc,dt,p,is_forced,velf,bforce,gacc,beta,scalars,dudtrko,dvdtrko,dwdtrko,u,v,w,f)
       call bulk_forcing(n,is_forced,f,u,v,w)
       dpdl(:) = dpdl(:) + f(:)
       if(is_impdiff) then
@@ -459,15 +545,15 @@ program cans
         call solve_helmholtz(n,ng,hi,arrplanw,normfftw,alpha, &
                              lambdaxyw,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'],w)
       end if
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
-      call fillps(n,dli,dzfi,dtrki,u,v,w,pp)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
+      call fillps(n,dxfi,dyfi,dzfi,dtrki,u,v,w,pp)
       call updt_rhs_b(['c','c','c'],cbcpre,n,is_bound,rhsbp%x,rhsbp%y,rhsbp%z,pp)
       call solver(n,ng,arrplanp,normfftp,lambdaxyp,ap,bp,cp,cbcpre,['c','c','c'],pp,is_ptdma_update_p,ap_d,cp_d)
-      call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,pp)
-      call correc(n,dli,dzci,dtrk,pp,u,v,w)
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dl,dzc,dzf,u,v,w)
-      call updatep(n,dli,dzci,dzfi,alpha,pp,p)
-      call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,p)
+      call boundp(cbcpre,n,bcpre,nb,is_bound,dxc,dyc,dzc,pp)
+      call correc(n,dxci,dyci,dzci,dtrk,pp,u,v,w)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
+      call updatep(n,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,pp,p)
+      call boundp(cbcpre,n,bcpre,nb,is_bound,dxc,dyc,dzc,p)
     end do
     dpdl(:)     = -dpdl(:)*dti
     fs(1:nscal) = fs(1:nscal)*dti
@@ -486,7 +572,7 @@ program cans
     end if
     if(icheck > 0.and.mod(istep,max(icheck,1)) == 0) then
       if(myid == 0) print*, 'Checking stability and divergence...'
-      call chkdt(n,dl,dzci,dzfi,visc,alpha_max,u,v,w,dt_cfl)
+      call chkdt(n,dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,alpha_max,u,v,w,dt_cfl)
       dt = merge(dt_f,min(cfl*dt_cfl,dtmax),dt_f > 0.)
       if(myid == 0) print*, 'dt_cfl = ', dt_cfl, 'dt = ', dt
       if(dt_cfl < small) then
@@ -496,7 +582,7 @@ program cans
         kill = .true.
       end if
       dti = 1./dt
-      call chkdiv(lo,hi,dli,dzfi,u,v,w,divtot,divmax)
+      call chkdiv(lo,hi,dxfi,dyfi,dzfi,u,v,w,divtot,divmax)
       if(myid == 0) print*, 'Total divergence = ', divtot, '| Maximum divergence = ', divmax
       if(.not.is_mask_divergence_check) then
         if(divmax > small.or.is_nan(divtot)) then
@@ -522,13 +608,13 @@ program cans
         meanvelv = 0.
         meanvelw = 0.
         if(is_forced(1).or.abs(bforce(1)) > 0.) then
-          call bulk_mean(n,grid_vol_ratio_f,u,meanvelu)
+          call bulk_mean(n,dlc_li_x,dlf_li_y,dlf_li_z,u,meanvelu)
         end if
         if(is_forced(2).or.abs(bforce(2)) > 0.) then
-          call bulk_mean(n,grid_vol_ratio_f,v,meanvelv)
+          call bulk_mean(n,dlf_li_x,dlc_li_y,dlf_li_z,v,meanvelv)
         end if
         if(is_forced(3).or.abs(bforce(3)) > 0.) then
-          call bulk_mean(n,grid_vol_ratio_c,w,meanvelw)
+          call bulk_mean(n,dlf_li_x,dlf_li_y,dlc_li_z,w,meanvelw)
         end if
         if(.not.any(is_forced(:))) dpdl(:) = -bforce(:) ! constant pressure gradient
         var(1)   = time
@@ -542,7 +628,7 @@ program cans
         write(scalnum,'(i3.3)') iscal
         if(s%is_forced.or.abs(s%source) > 0.) then
           meanscal = 0.
-          call bulk_mean(n,grid_vol_ratio_f,s%val,meanscal)
+          call bulk_mean(n,dlf_li_x,dlf_li_y,dlf_li_z,s%val,meanscal)
           if(.not.s%is_forced) fs(:) = s%source
           var(1:3) = [time,fs(iscal),meanscal]
           call out0d(trim(datadir)//'forcing_s_'//scalnum//'.out',3,var)
