@@ -73,7 +73,17 @@ if os.path.exists(xgridfile): os.remove(xgridfile)
 if os.path.exists(ygridfile): os.remove(ygridfile)
 if os.path.exists(zgridfile): os.remove(zgridfile)
 if(non_uniform_grid):
-    f   = open('grid.bin','rb')
+    f   = open('grid_x.bin','rb')
+    grid_x = np.fromfile(f,dtype=my_dtype)
+    f.close()
+    grid_x = np.reshape(grid_x,(ng[0],4),order='F')
+    x = r0[0] + grid_x[:,2]
+    f   = open('grid_y.bin','rb')
+    grid_y = np.fromfile(f,dtype=my_dtype)
+    f.close()
+    grid_y = np.reshape(grid_y,(ng[1],4),order='F')
+    y = r0[1] + grid_y[:,2]
+    f   = open('grid_z.bin','rb')
     grid_z = np.fromfile(f,dtype=my_dtype)
     f.close()
     grid_z = np.reshape(grid_z,(ng[2],4),order='F')
