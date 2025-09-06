@@ -27,7 +27,8 @@ non_uniform_grid = True
 filenames = input("Name of the pattern of the restart files to be visualzied [fld?*.bin]: ") or "fld?*.bin"
 files     = glob.glob(filenames)
 nsaves    = np.size(files)
-gridfile  = input("Name of the grid binary file [grid.bin]: ") or "grid.bin"
+gridfiles = input("Name of the grid binary files [grid_x.bin grid_y.bin grid_z.bin]: ") or "grid_x.bin grid_y.bin grid_z.bin"
+gridfiles = gridfiles.split(" ")
 variables = input("Names of stored variables [VEX VEY VEZ PRE]: ") or "VEX VEY VEZ PRE"
 variables = variables.split(" ")
 nflds     = np.size(variables)
@@ -82,7 +83,17 @@ if os.path.exists(xgridfile): os.remove(xgridfile)
 if os.path.exists(ygridfile): os.remove(ygridfile)
 if os.path.exists(zgridfile): os.remove(zgridfile)
 if(non_uniform_grid):
-    f   = open(gridfile,'rb')
+    f   = open(gridfiles[0],'rb')
+    grid_x = np.fromfile(f,dtype=my_dtype)
+    f.close()
+    grid_x = np.reshape(grid_x,(ng[0],4),order='F')
+    x = r0[0] + grid_x[:,0]
+    f   = open(gridfiles[1],'rb')
+    grid_y = np.fromfile(f,dtype=my_dtype)
+    f.close()
+    grid_y = np.reshape(grid_y,(ng[1],4),order='F')
+    y = r0[1] + grid_y[:,1]
+    f   = open(gridfiles[2],'rb')
     grid_z = np.fromfile(f,dtype=my_dtype)
     f.close()
     grid_z = np.reshape(grid_z,(ng[2],4),order='F')

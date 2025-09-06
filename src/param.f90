@@ -31,8 +31,8 @@ real(rp), parameter, dimension(3)   :: rkcoeff12 = rkcoeff(1,:)+rkcoeff(2,:)
 !
 integer , protected, dimension(3) :: ng
 real(rp), protected, dimension(3) :: l
-integer , protected :: gtype
-real(rp), protected :: gr
+integer , protected :: gtype(3)
+real(rp), protected :: gr(3)
 real(rp), protected :: cfl,dtmax,dt_f
 real(rp), protected :: visci
 !

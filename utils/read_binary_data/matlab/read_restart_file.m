@@ -28,7 +28,17 @@ xu = xp + dl(1)/2.;                           % staggered x grid
 yv = yp + dl(2)/2.;                           % staggered y grid
 zw = zp + dl(3)/2.;                           % staggered z grid
 if(non_uniform_grid)
-    f   = fopen('grid.bin');
+    f   = fopen('grid_x.bin');
+    grid_x = fread(f,[ng(1),4],precision);
+    fclose(f);
+    xp = r0(1) + grid_x(:,3)'; % centered  x grid
+    xu = r0(1) + grid_x(:,4)'; % staggered x grid
+    f   = fopen('grid_y.bin');
+    grid_y = fread(f,[ng(2),4],precision);
+    fclose(f);
+    yp = r0(2) + grid_y(:,3)'; % centered  y grid
+    yv = r0(2) + grid_y(:,4)'; % staggered y grid
+    f   = fopen('grid_z.bin');
     grid_z = fread(f,[ng(3),4],precision);
     fclose(f);
     zp = r0(3) + grid_z(:,3)'; % centered  z grid

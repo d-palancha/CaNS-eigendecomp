@@ -19,7 +19,7 @@ module mod_rk
   implicit none
   public rk,rk_scal
   contains
-  subroutine rk(rkpar,n,dli,dzci,dzfi,grid_vol_ratio_c,grid_vol_ratio_f,visc,dt,p, &
+  subroutine rk(rkpar,n,dxci,dxfi,dyci,dyfi,dzci,dzfi,dlc_li_x,dlf_li_x,dlc_li_y,dlf_li_y,dlc_li_z,dlf_li_z,visc,dt,p, &
                 is_forced,velf,bforce,gacc,beta,scalars,dudtrko,dvdtrko,dwdtrko,u,v,w,f)
 #if defined(_OPENACC)
     use mod_common_cudecomp, only: dudtrk_t => work, &
@@ -33,10 +33,9 @@ module mod_rk
     implicit none
     real(rp), intent(in   ), dimension(2)        :: rkpar
     integer , intent(in   ), dimension(3)        :: n
+    real(rp), intent(in   ), dimension(0:)       :: dxci,dxfi,dyci,dyfi,dzci,dzfi
+    real(rp), intent(in   ), dimension(0:)       :: dlc_li_x,dlf_li_x,dlc_li_y,dlf_li_y,dlc_li_z,dlf_li_z
     real(rp), intent(in   )                      :: visc,dt
-    real(rp), intent(in   ), dimension(3)        :: dli
-    real(rp), intent(in   ), dimension(0:)       :: dzci,dzfi
-    real(rp), intent(in   ), dimension(0:)       :: grid_vol_ratio_c,grid_vol_ratio_f
     real(rp), intent(in   ), dimension(0:,0:,0:) :: p
     logical , intent(in   ), dimension(3)        :: is_forced
     real(rp), intent(in   ), dimension(3)        :: velf,bforce
@@ -103,7 +102,7 @@ module mod_rk
     end if
     !
     if(is_fast_mom_kernels) then
-      call mom_xyz_ad(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,visc,u,v,w,dudtrk,dvdtrk,dwdtrk,dudtrkd,dvdtrkd,dwdtrkd)
+      call mom_xyz_ad(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,u,v,w,dudtrk,dvdtrk,dwdtrk,dudtrkd,dvdtrkd,dwdtrkd)
     else
       !$acc parallel loop collapse(3) default(present) async(1)
       !$OMP parallel do   collapse(3) DEFAULT(shared)
@@ -117,9 +116,9 @@ module mod_rk
         end do
       end do
       if(.not.is_impdiff) then
-        call momx_d(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,visc,u,dudtrk)
-        call momy_d(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,visc,v,dvdtrk)
-        call momz_d(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,visc,w,dwdtrk)
+        call momx_d(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,u,dudtrk)
+        call momy_d(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,v,dvdtrk)
+        call momz_d(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,w,dwdtrk)
       else
         !$acc parallel loop collapse(3) default(present) async(1)
         !$OMP parallel do   collapse(3) DEFAULT(shared)
@@ -133,20 +132,20 @@ module mod_rk
           end do
         end do
         if(.not.is_impdiff_1d) then
-          call momx_d(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,visc,u,dudtrkd)
-          call momy_d(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,visc,v,dvdtrkd)
-          call momz_d(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,visc,w,dwdtrkd)
+          call momx_d(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,u,dudtrkd)
+          call momy_d(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,v,dvdtrkd)
+          call momz_d(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,w,dwdtrkd)
         else
-          call momx_d_xy(n(1),n(2),n(3),dli(1),dli(2),visc,u,dudtrk )
-          call momy_d_xy(n(1),n(2),n(3),dli(1),dli(2),visc,v,dvdtrk )
-          call momz_d_xy(n(1),n(2),n(3),dli(1),dli(2),visc,w,dwdtrk )
-          call momx_d_z( n(1),n(2),n(3),dzci  ,dzfi  ,visc,u,dudtrkd)
-          call momy_d_z( n(1),n(2),n(3),dzci  ,dzfi  ,visc,v,dvdtrkd)
-          call momz_d_z( n(1),n(2),n(3),dzci  ,dzfi  ,visc,w,dwdtrkd)
+          call momx_d_xy(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,visc,u,dudtrk)
+          call momy_d_xy(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,visc,v,dvdtrk)
+          call momz_d_xy(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,visc,w,dwdtrk)
+          call momx_d_z( n(1),n(2),n(3),dzci,dzfi,visc,u,dudtrkd)
+          call momy_d_z( n(1),n(2),n(3),dzci,dzfi,visc,v,dvdtrkd)
+          call momz_d_z( n(1),n(2),n(3),dzci,dzfi,visc,w,dwdtrkd)
         end if
-        call momx_a(n(1),n(2),n(3),dli(1),dli(2),dzfi,u,v,w,dudtrk)
-        call momy_a(n(1),n(2),n(3),dli(1),dli(2),dzfi,u,v,w,dvdtrk)
-        call momz_a(n(1),n(2),n(3),dli(1),dli(2),dzci,u,v,w,dwdtrk)
+        call momx_a(n(1),n(2),n(3),dxci,dyfi,dzfi,u,v,w,dudtrk)
+        call momy_a(n(1),n(2),n(3),dxfi,dyci,dzfi,u,v,w,dvdtrk)
+        call momz_a(n(1),n(2),n(3),dxfi,dyfi,dzci,u,v,w,dwdtrk)
       end if
     end if
     !
@@ -157,13 +156,13 @@ module mod_rk
       do j=1,n(2)
         do i=1,n(1)
           u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
-                                factor12*(bforce(1) - dli(1)*( p(i+1,j,k)-p(i,j,k)))
+                                factor12*(bforce(1) - dxci(i)*( p(i+1,j,k)-p(i,j,k)))
           if(is_buoyancy) then
             u(i,j,k) = u(i,j,k) - factor12*gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k))
           end if
           !
           v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
-                                factor12*(bforce(2) - dli(2)*( p(i,j+1,k)-p(i,j,k)))
+                                factor12*(bforce(2) - dyci(j)*( p(i,j+1,k)-p(i,j,k)))
           if(is_buoyancy) then
             v(i,j,k) = v(i,j,k) - factor12*gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k))
           end if
@@ -190,9 +189,9 @@ module mod_rk
         do j=1,n(2)
           do i=1,n(1)
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
-                                  factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)))
+                                  factor12*(bforce(1) - dxci(i)*(p(i+1,j,k)-p(i,j,k)))
             v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
-                                  factor12*(bforce(2) - dli(2)*(p(i,j+1,k)-p(i,j,k)))
+                                  factor12*(bforce(2) - dyci(j)*(p(i,j+1,k)-p(i,j,k)))
             w(i,j,k) = w(i,j,k) + factor1*dwdtrk(i,j,k) + factor2*dwdtrko(i,j,k) + &
                                   factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k)))
           end do
@@ -205,10 +204,10 @@ module mod_rk
         do j=1,n(2)
           do i=1,n(1)
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
-                                  factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) + &
+                                  factor12*(bforce(1) - dxci(i)*(p(i+1,j,k)-p(i,j,k)) + &
                                             dudtrkd(i,j,k))
             v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
-                                  factor12*(bforce(2) - dli(2)*(p(i,j+1,k)-p(i,j,k)) + &
+                                  factor12*(bforce(2) - dyci(j)*(p(i,j+1,k)-p(i,j,k)) + &
                                             dvdtrkd(i,j,k))
             w(i,j,k) = w(i,j,k) + factor1*dwdtrk(i,j,k) + factor2*dwdtrko(i,j,k) + &
                                   factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k)) + &
@@ -223,10 +222,10 @@ module mod_rk
         do j=1,n(2)
           do i=1,n(1)
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
-                                  factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k))) &
+                                  factor12*(bforce(1) - dxci(i)*(p(i+1,j,k)-p(i,j,k))) &
                                           - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k))
             v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
-                                  factor12*(bforce(2) - dli(2)*(p(i,j+1,k)-p(i,j,k))) &
+                                  factor12*(bforce(2) - dyci(j)*(p(i,j+1,k)-p(i,j,k))) &
                                           - gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k))
             w(i,j,k) = w(i,j,k) + factor1*dwdtrk(i,j,k) + factor2*dwdtrko(i,j,k) + &
                                   factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k))) &
@@ -241,11 +240,11 @@ module mod_rk
         do j=1,n(2)
           do i=1,n(1)
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
-                                  factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) &
+                                  factor12*(bforce(1) - dxci(i)*(p(i+1,j,k)-p(i,j,k)) &
                                           - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k)) + &
                                             dudtrkd(i,j,k))
             v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
-                                  factor12*(bforce(2) - dli(2)*(p(i,j+1,k)-p(i,j,k)) &
+                                  factor12*(bforce(2) - dyci(j)*(p(i,j+1,k)-p(i,j,k)) &
                                           - gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k)) + &
                                             dvdtrkd(i,j,k))
             w(i,j,k) = w(i,j,k) + factor1*dwdtrk(i,j,k) + factor2*dwdtrko(i,j,k) + &
@@ -284,9 +283,9 @@ module mod_rk
 !        end do
 !      end do
 !    end do
-!    call momx_p(n(1),n(2),n(3),dli(1),bforce(1),p,dudtrk)
-!    call momy_p(n(1),n(2),n(3),dli(2),bforce(2),p,dvdtrk)
-!    call momz_p(n(1),n(2),n(3),dzci  ,bforce(3),p,dwdtrk)
+!    call momx_p(n(1),n(2),n(3),dxci,bforce(1),p,dudtrk)
+!    call momy_p(n(1),n(2),n(3),dyci,bforce(2),p,dvdtrk)
+!    call momz_p(n(1),n(2),n(3),dzci,bforce(3),p,dwdtrk)
 !    !$acc parallel loop collapse(3)
 !    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
 !    do k=1,n(3)
@@ -302,7 +301,7 @@ module mod_rk
     !
     ! compute bulk velocity forcing
     !
-    call cmpt_bulk_forcing(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f,u,v,w,f)
+    call cmpt_bulk_forcing(n,is_forced,velf,dlc_li_x,dlf_li_x,dlc_li_y,dlf_li_y,dlc_li_z,dlf_li_z,u,v,w,f)
     !
     if(is_impdiff) then
       !
@@ -322,7 +321,7 @@ module mod_rk
     end if
   end subroutine rk
   !
-  subroutine rk_scal(rkpar,n,dli,l,dzci,dzfi,grid_vol_ratio_f,alpha,dt,is_bound,u,v,w, &
+  subroutine rk_scal(rkpar,n,l,dxci,dxfi,dyci,dyfi,dzci,dzfi,dlf_li_x,dlf_li_y,dlf_li_z,alpha,dt,is_bound,u,v,w, &
                      is_forced,scalf,ssource,fluxo,dsdtrko,s,f)
 #if defined(_OPENACC)
     use mod_common_cudecomp, only: dsdtrk_t => work
@@ -335,9 +334,9 @@ module mod_rk
     logical , parameter :: is_cmpt_wallflux = .false.
     real(rp), intent(in   ), dimension(2) :: rkpar
     integer , intent(in   ), dimension(3) :: n
-    real(rp), intent(in   ), dimension(3) :: dli,l
-    real(rp), intent(in   ), dimension(0:) :: dzci,dzfi
-    real(rp), intent(in   ), dimension(:) :: grid_vol_ratio_f
+    real(rp), intent(in   ), dimension(3) :: l
+    real(rp), intent(in   ), dimension(0:) :: dxci,dxfi,dyci,dyfi,dzci,dzfi
+    real(rp), intent(in   ), dimension(0:) :: dlf_li_x,dlf_li_y,dlf_li_z
     real(rp), intent(in   ) :: alpha,dt
     logical , intent(in   ), dimension(0:1,3)    :: is_bound
     real(rp), intent(in   ), dimension(0:,0:,0:) :: u,v,w
@@ -397,7 +396,7 @@ module mod_rk
     dsdtrk => dsdtrk_t
 #endif
     !
-    call scal(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,alpha,u,v,w,s,dsdtrk,dsdtrkd)
+    call scal(n(1),n(2),n(3),dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,u,v,w,s,dsdtrk,dsdtrkd)
 #if !defined(_LOOP_UNSWITCHING)
     !$acc parallel loop collapse(3) default(present) async(1)
     !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
@@ -439,7 +438,7 @@ module mod_rk
     ! compute wall scalar flux
     !
     if(is_cmpt_wallflux) then
-      call cmpt_scalflux(n,is_bound,l,dli,dzci,dzfi,alpha,s(:,:,:),flux)
+      call cmpt_scalflux(n,is_bound,l,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,s(:,:,:),flux)
       f = (factor1*sum((flux( 0,:)+flux( 1,:))/l(:)) + &
            factor2*sum((fluxo(0,:)+fluxo(1,:))/l(:)))
       fluxo(:,:) = flux(:,:)
@@ -448,7 +447,7 @@ module mod_rk
     ! bulk scalar forcing
     !
     if(is_forced) then
-      call bulk_mean(n,grid_vol_ratio_f,s(:,:,:),mean)
+      call bulk_mean(n,dlf_li_x,dlf_li_y,dlf_li_z,s(:,:,:),mean)
       f = scalf - mean
     end if
     if(is_impdiff) then
@@ -480,12 +479,12 @@ module mod_rk
     end do
   end subroutine rk_scal
   !
-  subroutine cmpt_bulk_forcing(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f,u,v,w,f)
+  subroutine cmpt_bulk_forcing(n,is_forced,velf,dlc_li_x,dlf_li_x,dlc_li_y,dlf_li_y,dlc_li_z,dlf_li_z,u,v,w,f)
     implicit none
     integer , intent(in   ), dimension(3) :: n
     logical , intent(in   ), dimension(3) :: is_forced
     real(rp), intent(in   ), dimension(3) :: velf
-    real(rp), intent(in   ), dimension(0:) :: grid_vol_ratio_c,grid_vol_ratio_f
+    real(rp), intent(in   ), dimension(0:) :: dlc_li_x,dlf_li_x,dlc_li_y,dlf_li_y,dlc_li_z,dlf_li_z
     real(rp), intent(inout), dimension(0:,0:,0:) :: u,v,w
     real(rp), intent(out  ), dimension(3) :: f
     real(rp) :: mean
@@ -494,20 +493,21 @@ module mod_rk
     !
     f(:) = 0.
     if(is_forced(1)) then
-      call bulk_mean(n,grid_vol_ratio_f,u,mean)
+      call bulk_mean(n,dlc_li_x,dlf_li_y,dlf_li_z,u,mean)
       f(1) = velf(1) - mean
     end if
     if(is_forced(2)) then
-      call bulk_mean(n,grid_vol_ratio_f,v,mean)
+      call bulk_mean(n,dlf_li_x,dlc_li_y,dlf_li_z,v,mean)
       f(2) = velf(2) - mean
     end if
     if(is_forced(3)) then
-      call bulk_mean(n,grid_vol_ratio_c,w,mean)
+      call bulk_mean(n,dlf_li_x,dlf_li_y,dlc_li_z,w,mean)
       f(3) = velf(3) - mean
     end if
   end subroutine cmpt_bulk_forcing
   !
-  subroutine cmpt_bulk_forcing_alternative(rkpar,n,dli,l,dzci,dzfi,visc,dt,is_bound,is_forced,u,v,w,tauxo,tauyo,tauzo,f,is_first)
+  subroutine cmpt_bulk_forcing_alternative(rkpar,n,l,dxci,dxfi,dyci,dyfi,dzci,dzfi, &
+                                           visc,dt,is_bound,is_forced,u,v,w,tauxo,tauyo,tauzo,f,is_first)
     !
     ! computes the pressure gradient to be added to the flow that perfectly balances the wall shear stresses
     ! this effectively prescribes zero net acceleration, which allows to sustain a constant mass flux
@@ -515,9 +515,9 @@ module mod_rk
     implicit none
     real(rp), intent(in), dimension(2) :: rkpar
     integer , intent(in), dimension(3) :: n
+    real(rp), intent(in   ), dimension(3) :: l
+    real(rp), intent(in   ), dimension(0:) :: dxci,dxfi,dyci,dyfi,dzci,dzfi
     real(rp), intent(in) :: visc,dt
-    real(rp), intent(in   ), dimension(3) :: dli,l
-    real(rp), intent(in   ), dimension(0:) :: dzci,dzfi
     logical , intent(in   ), dimension(0:1,3)    :: is_bound
     logical , intent(in   ), dimension(3) :: is_forced
     real(rp), intent(in   ), dimension(0:,0:,0:) :: u,v,w
@@ -533,7 +533,7 @@ module mod_rk
     factor2 = rkpar(2)*dt
     factor12 = (factor1 + factor2)/2.
     !
-    call cmpt_wallshear(n,is_forced,is_bound,l,dli,dzci,dzfi,visc,u,v,w,taux,tauy,tauz)
+    call cmpt_wallshear(n,is_forced,is_bound,l,dxci,dxfi,dyci,dyfi,dzci,dzfi,visc,u,v,w,taux,tauy,tauz)
     taux_tot(:) = sum(taux(0:1,:),1); tauxo_tot(:) = sum(tauxo(0:1,:),1)
     tauy_tot(:) = sum(tauy(0:1,:),1); tauyo_tot(:) = sum(tauyo(0:1,:),1)
     tauz_tot(:) = sum(tauz(0:1,:),1); tauzo_tot(:) = sum(tauzo(0:1,:),1)

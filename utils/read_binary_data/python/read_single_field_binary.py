@@ -33,7 +33,19 @@ def read_single_field_binary(data_dir,filenamei,iskip):
     yv = yp + dl[1]/2.                              # staggered y grid
     zw = zp + dl[2]/2.                              # staggered z grid
     if(non_uniform_grid):
-        f   = open(data_dir+'/grid.bin','rb')
+        f   = open(data_dir+'grid_x.bin','rb')
+        grid_x = np.fromfile(f,dtype=precision)
+        f.close()
+        grid_x = np.reshape(grid_x,(ng[0],4),order='F')
+        xp = r0[0] + np.transpose(grid_x[:,2]) # centered  x grid
+        xu = r0[0] + np.transpose(grid_x[:,3]) # staggered x grid
+        f   = open(data_dir+'grid_y.bin','rb')
+        grid_y = np.fromfile(f,dtype=precision)
+        f.close()
+        grid_y = np.reshape(grid_y,(ng[1],4),order='F')
+        yp = r0[1] + np.transpose(grid_y[:,2]) # centered  y grid
+        yv = r0[1] + np.transpose(grid_y[:,3]) # staggered y grid
+        f   = open(data_dir+'grid_z.bin','rb')
         grid_z = np.fromfile(f,dtype=precision)
         f.close()
         grid_z = np.reshape(grid_z,(ng[2],4),order='F')
