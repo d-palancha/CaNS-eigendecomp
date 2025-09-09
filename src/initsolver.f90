@@ -12,18 +12,17 @@ module mod_initsolver
   private
   public initsolver
   contains
-  subroutine initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbc,bc,lambdaxy,c_or_f,a,b,c,arrplan,normfft, &
-                        rhsbx,rhsby,rhsbz)
+  subroutine initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbc,bc,lambdaxy,dxdy, &
+                        c_or_f,a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
     !
     ! initializes the Poisson/Helmholtz solver
     !
     implicit none
     integer , intent(in), dimension(3) :: ng,n_x_fft,n_y_fft,lo_z,hi_z
-    real(rp), intent(in), dimension(3 ) :: dli
-    real(rp), intent(in), dimension(0:) :: dzci_g,dzfi_g
+    real(rp), intent(in), dimension(0:) :: dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g
     character(len=1), intent(in), dimension(0:1,3) :: cbc
     real(rp)        , intent(in), dimension(0:1,3) :: bc
-    real(rp), intent(out), dimension(lo_z(1):,lo_z(2):) :: lambdaxy
+    real(rp), intent(out), dimension(lo_z(1):,lo_z(2):) :: lambdaxy,dxdy
     character(len=1), intent(in), dimension(3) :: c_or_f
     real(rp), intent(out), dimension(lo_z(3):) :: a,b,c
 #if !defined(_OPENACC) || defined(_USE_HIP)
@@ -36,45 +35,88 @@ module mod_initsolver
     real(rp), intent(out), dimension(:,:,0:) :: rhsbz
     real(rp), intent(out) :: normfft
     real(rp), dimension(3)        :: dl
+    real(rp), dimension(0:ng(1)+1) :: dxc_g,dxf_g
+    real(rp), dimension(0:ng(2)+1) :: dyc_g,dyf_g
     real(rp), dimension(0:ng(3)+1) :: dzc_g,dzf_g
     integer :: i,j
-    real(rp), dimension(ng(1))      :: lambdax
-    real(rp), dimension(ng(2))      :: lambday
-    real(rp), dimension(ng(3))      :: a_g,b_g,c_g
+    real(rp), dimension(ng(1)) :: lambdax
+    real(rp), dimension(ng(2)) :: lambday
+    real(rp), dimension(ng(3)) :: a_g,b_g,c_g
     !
-    ! generating eigenvalues consistent with the BCs
-    !
-    call eigenvalues(ng(1),cbc(:,1),c_or_f(1),lambdax)
-    lambdax(:) = lambdax(:)*dli(1)**2
-    call eigenvalues(ng(2),cbc(:,2),c_or_f(2),lambday)
-    lambday(:) = lambday(:)*dli(2)**2
-    !
-    ! add eigenvalues
-    !
-    do j=lo_z(2),hi_z(2)
-      do i=lo_z(1),hi_z(1)
-        lambdaxy(i,j) = lambdax(i)+lambday(j)
-      end do
-    end do
+    dxc_g(:) = dxci_g(:)**(-1)
+    dxf_g(:) = dxfi_g(:)**(-1)
+    dyc_g(:) = dyci_g(:)**(-1)
+    dyf_g(:) = dyfi_g(:)**(-1)
+    dzc_g(:) = dzci_g(:)**(-1)
+    dzf_g(:) = dzfi_g(:)**(-1)
     !
     ! compute and distribute coefficients for tridiagonal solver
     !
     call tridmatrix(cbc(:,3),ng(3),dzci_g,dzfi_g,c_or_f(3),a_g,b_g,c_g)
-    a(:) = a_g(lo_z(3):hi_z(3))
-    b(:) = b_g(lo_z(3):hi_z(3))
-    c(:) = c_g(lo_z(3):hi_z(3))
+    !
+    ! z tri-diagonal system is not symmetrized -- r.h.s. requires additional scaling
+    !
+    select case(c_or_f(3))
+    case('c')
+      a(:) = a_g(lo_z(3):hi_z(3))*dzfi_g(lo_z(3):hi_z(3))
+      b(:) = b_g(lo_z(3):hi_z(3))*dzfi_g(lo_z(3):hi_z(3))
+      c(:) = c_g(lo_z(3):hi_z(3))*dzfi_g(lo_z(3):hi_z(3))
+    case('f')
+      a(:) = a_g(lo_z(3):hi_z(3))*dzci_g(lo_z(3):hi_z(3))
+      b(:) = b_g(lo_z(3):hi_z(3))*dzci_g(lo_z(3):hi_z(3))
+      c(:) = c_g(lo_z(3):hi_z(3))*dzci_g(lo_z(3):hi_z(3))
+    end select
+    !
+    ! generating eigenvalues for uniform grid spacing
+    !
+    dl(1) = dxf_g(0) ! == dxc_g(0)
+    dl(2) = dyf_g(0) ! == dyc_g(0)
+    call eigenvalues(ng(1),cbc(:,1),c_or_f(1),lambdax)
+    lambdax(:) = lambdax(:)/dl(1)
+    call eigenvalues(ng(2),cbc(:,2),c_or_f(2),lambday)
+    lambday(:) = lambday(:)/dl(2)
+    !
+    ! add scaled eigenvalues and store cell areas
+    !
+    if(     c_or_f(3) == 'c') then
+      do j=lo_z(2),hi_z(2)
+        do i=lo_z(1),hi_z(1)
+          lambdaxy(i,j) = lambdax(i)*dyf_g(j)+lambday(j)*dxf_g(i)
+          dxdy(i,j) = dxf_g(i)*dyf_g(j)
+        end do
+      end do
+    else if(c_or_f(3) == 'f') then
+      do j=lo_z(2),hi_z(2)
+        do i=lo_z(1),hi_z(1)
+          lambdaxy(i,j) = lambdax(i)*dyc_g(j)+lambday(j)*dxc_g(i)
+          dxdy(i,j) = dxc_g(i)*dyc_g(j)
+        end do
+      end do
+    end if
     !
     ! compute values to be added to the right hand side
     !
-    dl(:)  = dli( :)**(-1)
-    dzc_g(:) = dzci_g(:)**(-1)
-    dzf_g(:) = dzfi_g(:)**(-1)
-    call bc_rhs(cbc(:,1),bc(:,1),[dl(1) ,dl(1)      ],[dl(1) ,dl(1)    ],c_or_f(1),rhsbx)
-    call bc_rhs(cbc(:,2),bc(:,2),[dl(2) ,dl(2)      ],[dl(2) ,dl(2)    ],c_or_f(2),rhsby)
+    if(     c_or_f(1) == 'c') then
+      call bc_rhs(cbc(:,1),bc(:,1),[dxc_g(0),dxc_g(ng(1)  )],[dxf_g(1),dxf_g(ng(1))],c_or_f(1),rhsbx)
+    else if(c_or_f(1) == 'f') then
+      call bc_rhs(cbc(:,1),bc(:,1),[dxc_g(1),dxc_g(ng(1)-1)],[dxf_g(1),dxf_g(ng(1))],c_or_f(1),rhsbx)
+    end if
+    if(     c_or_f(2) == 'c') then
+      call bc_rhs(cbc(:,2),bc(:,2),[dyc_g(0),dyc_g(ng(2)  )],[dyf_g(1),dyf_g(ng(2))],c_or_f(2),rhsby)
+    else if(c_or_f(2) == 'f') then
+      call bc_rhs(cbc(:,2),bc(:,2),[dyc_g(1),dyc_g(ng(2)-1)],[dyf_g(1),dyf_g(ng(2))],c_or_f(2),rhsby)
+    end if
+    !
+    ! z tri-diagonal system is not symmetrized -- r.h.s. requires additional scaling
+    !
     if(     c_or_f(3) == 'c') then
       call bc_rhs(cbc(:,3),bc(:,3),[dzc_g(0),dzc_g(ng(3)  )],[dzf_g(1),dzf_g(ng(3))],c_or_f(3),rhsbz)
+      rhsbz(:,:,0) = rhsbz(:,:,0)/dzf_g(1)
+      rhsbz(:,:,1) = rhsbz(:,:,1)/dzf_g(ng(3))
     else if(c_or_f(3) == 'f') then
       call bc_rhs(cbc(:,3),bc(:,3),[dzc_g(1),dzc_g(ng(3)-1)],[dzf_g(1),dzf_g(ng(3))],c_or_f(3),rhsbz)
+      rhsbz(:,:,0) = rhsbz(:,:,0)/dzc_g(1)
+      rhsbz(:,:,1) = rhsbz(:,:,1)/dzc_g(ng(3)-1)
     end if
     !
     ! prepare ffts
@@ -156,13 +198,13 @@ module mod_initsolver
     select case(c_or_f)
     case('c')
       do k=1,n
-        a(k) = dzfi(k)*dzci(k-1)
-        c(k) = dzfi(k)*dzci(k)
+        a(k) = dzci(k-1)
+        c(k) = dzci(k)
       end do
     case('f')
       do k = 1,n
-        a(k) = dzfi(k)*dzci(k)
-        c(k) = dzfi(k+1)*dzci(k)
+        a(k) = dzfi(k)
+        c(k) = dzfi(k+1)
       end do
     end select
     b(:) = -(a(:)+c(:))
@@ -193,7 +235,7 @@ module mod_initsolver
     real(rp), intent(in), dimension(0:1) :: dlc,dlf
     real(rp), intent(out), dimension(:,:,0:) :: rhs
     character(len=1), intent(in) :: c_or_f ! c -> cell-centered; f -> face-centered
-    real(rp), dimension(0:1) :: factor
+    real(rp) :: factor
     real(rp) :: sgn
     integer :: ibound
     !
@@ -202,32 +244,30 @@ module mod_initsolver
       do ibound = 0,1
         select case(cbc(ibound))
         case('P')
-          factor(ibound) = 0.
+          factor = 0.
         case('D')
-          factor(ibound) = -2.*bc(ibound)
+          factor = -2.*bc(ibound)
         case('N')
           if(ibound == 0) sgn =  1.
           if(ibound == 1) sgn = -1.
-          factor(ibound) = sgn*dlc(ibound)*bc(ibound)
+          factor = sgn*dlc(ibound)*bc(ibound)
         end select
+        rhs(:,:,ibound) = factor/dlc(ibound)
       end do
     case('f')
       do ibound = 0,1
         select case(cbc(ibound))
         case('P')
-          factor(ibound) = 0.
+          factor = 0.
         case('D')
-          factor(ibound) = -bc(ibound)
+          factor = -bc(ibound)
         case('N')
           if(ibound == 0) sgn =  1.
           if(ibound == 1) sgn = -1.
-          factor(ibound) = sgn*dlf(ibound)*bc(ibound)
+          factor = sgn*dlf(ibound)*bc(ibound)
         end select
+        rhs(:,:,ibound) = factor/dlf(ibound)
       end do
     end select
-    do concurrent(ibound=0:1)
-      rhs(:,:,ibound) = factor(ibound)/dlc(ibound)/dlf(ibound)
-      rhs(:,:,ibound) = factor(ibound)/dlc(ibound)/dlf(ibound)
-    end do
   end subroutine bc_rhs
 end module mod_initsolver

@@ -201,8 +201,9 @@ module mod_sanity
     print*, 'ERROR: Flow cannot be forced in a non-periodic direction; check the BCs and is_forced in `input.nml`.'
   end subroutine chk_forcing
   !
-  subroutine test_sanity_solver(ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z,dli, &
-                                dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi,dzci_g,dzfi_g, &
+  subroutine test_sanity_solver(ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z, &
+                                dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi, &
+                                dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g, &
                                 nb,is_bound,cbcvel,cbcpre,bcvel,bcpre)
 #if defined(_OPENACC)
     use mod_workspaces     , only: set_cufft_wspace
@@ -210,8 +211,8 @@ module mod_sanity
 #endif
     implicit none
     integer , intent(in), dimension(3) :: ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z
-    real(rp), intent(in), dimension(3) :: dli
-    real(rp), intent(in), dimension(0:) :: dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi,dzci_g,dzfi_g
+    real(rp), intent(in), dimension(0:) :: dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi, &
+                                           dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g
     integer , intent(in), dimension(0:1,3) :: nb
     logical , intent(in), dimension(0:1,3) :: is_bound
     character(len=1), intent(in), dimension(0:1,3,3) :: cbcvel
@@ -225,10 +226,9 @@ module mod_sanity
     integer    , dimension(2,2) :: arrplan
 #endif
     real(rp) :: normfft
-    real(rp), allocatable, dimension(:,:) ::  lambdaxy
+    real(rp), allocatable, dimension(:,:) ::  lambdaxy,dxdy
     real(rp), allocatable, dimension(:) :: a,b,c,bb
     real(rp), allocatable, dimension(:,:,:) :: rhsbx,rhsby,rhsbz
-    real(rp), dimension(3) :: dl
     real(rp) :: dt,dti,alpha
     real(rp) :: divtot,divmax,resmax
     integer :: i,j,k
@@ -239,7 +239,7 @@ module mod_sanity
              v(0:n(1)+1,0:n(2)+1,0:n(3)+1), &
              w(0:n(1)+1,0:n(2)+1,0:n(3)+1), &
              p(0:n(1)+1,0:n(2)+1,0:n(3)+1), &
-             lambdaxy(n_z(1),n_z(2)), &
+             lambdaxy(n_z(1),n_z(2)),dxdy(n_z(1),n_z(2)), &
              a(n_z(3)),b(n_z(3)),c(n_z(3)), &
              rhsbx(n(2),n(3),0:1), &
              rhsby(n(1),n(3),0:1), &
@@ -259,19 +259,18 @@ module mod_sanity
     !
     ! test pressure correction
     !
-    call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcpre,bcpre(:,:), &
-                    lambdaxy,['c','c','c'],a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
-    !$acc enter data copyin(lambdaxy,a,b,c,rhsbx,rhsby,rhsbz)
+    call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbcpre,bcpre(:,:), &
+                    lambdaxy,dxdy,['c','c','c'],a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
+    !$acc enter data copyin(lambdaxy,dxdy,a,b,c,rhsbx,rhsby,rhsbz)
 #if defined(_OPENACC)
     call set_cufft_wspace(pack(arrplan,.true.),istream_acc_queue_1)
 #endif
-    dl  = dli**(-1)
     dt  = acos(-1.) ! value is irrelevant
     dti = dt**(-1)
     call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
     call fillps(n,dxfi,dyfi,dzfi,dti,u,v,w,p)
     call updt_rhs_b(['c','c','c'],cbcpre,n,is_bound,rhsbx,rhsby,rhsbz,p)
-    call solver(n,ng,arrplan,normfft,lambdaxy,a,b,c,cbcpre,['c','c','c'],p)
+    call solver(n,ng,arrplan,normfft,lambdaxy,dxdy,a,b,c,cbcpre,['c','c','c'],p)
     call boundp(cbcpre,n,bcpre,nb,is_bound,dxc,dyc,dzc,p)
     call correc(n,dxci,dyci,dzci,dt,p,u,v,w)
     call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
@@ -301,9 +300,9 @@ module mod_sanity
       call add_noise(ng,lo,789,.5_rp,w(1:n(1),1:n(2),1:n(3)))
       !$acc update device(u,v,w)
       !$acc enter data create(bb)
-      call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcvel(:,:,1),bcvel(:,:,1), &
-                      lambdaxy,['f','c','c'],a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
-      !$acc update device(lambdaxy,a,b,c,rhsbx,rhsby,rhsbz)
+      call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbcvel(:,:,1),bcvel(:,:,1), &
+                      lambdaxy,dxdy,['f','c','c'],a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
+      !$acc update device(lambdaxy,dxdy,a,b,c,rhsbx,rhsby,rhsbz)
 #if defined(_OPENACC)
       call set_cufft_wspace(pack(arrplan,.true.),istream_acc_queue_1)
 #endif
@@ -324,7 +323,7 @@ module mod_sanity
         bb(k) = b(k) + alpha
       end do
       call updt_rhs_b(['f','c','c'],cbcvel(:,:,1),n,is_bound,rhsbx,rhsby,rhsbz,u)
-      call solver(n,ng,arrplan,normfft,lambdaxy,a,bb,c,cbcvel(:,:,1),['f','c','c'],u)
+      call solver(n,ng,arrplan,normfft,lambdaxy,dxdy,a,bb,c,cbcvel(:,:,1),['f','c','c'],u)
       call fftend(arrplan)
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in u
       call chk_helmholtz(lo,hi,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,p,u,cbcvel(:,:,1),is_bound,['f','c','c'],resmax)
@@ -333,9 +332,9 @@ module mod_sanity
       print*, 'ERROR: wrong solution of Helmholtz equation in x direction.'
       passed = passed.and.passed_loc
       !
-      call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcvel(:,:,2),bcvel(:,:,2), &
-                      lambdaxy,['c','f','c'],a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
-      !$acc update device(lambdaxy,a,b,c,rhsbx,rhsby,rhsbz)
+      call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbcvel(:,:,2),bcvel(:,:,2), &
+                      lambdaxy,dxdy,['c','f','c'],a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
+      !$acc update device(lambdaxy,dxdy,a,b,c,rhsbx,rhsby,rhsbz)
 #if defined(_OPENACC)
       call set_cufft_wspace(pack(arrplan,.true.),istream_acc_queue_1)
 #endif
@@ -356,7 +355,7 @@ module mod_sanity
         bb(k) = b(k) + alpha
       end do
       call updt_rhs_b(['c','f','c'],cbcvel(:,:,2),n,is_bound,rhsbx,rhsby,rhsbz,v)
-      call solver(n,ng,arrplan,normfft,lambdaxy,a,bb,c,cbcvel(:,:,2),['c','f','c'],v)
+      call solver(n,ng,arrplan,normfft,lambdaxy,dxdy,a,bb,c,cbcvel(:,:,2),['c','f','c'],v)
       call fftend(arrplan)
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in v
       call chk_helmholtz(lo,hi,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,p,v,cbcvel(:,:,2),is_bound,['c','f','c'],resmax)
@@ -365,9 +364,9 @@ module mod_sanity
       print*, 'ERROR: wrong solution of Helmholtz equation in y direction.'
       passed = passed.and.passed_loc
       !
-      call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcvel(:,:,3),bcvel(:,:,3), &
-                      lambdaxy,['c','c','f'],a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
-      !$acc update device(lambdaxy,a,b,c,rhsbx,rhsby,rhsbz)
+      call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbcvel(:,:,3),bcvel(:,:,3), &
+                      lambdaxy,dxdy,['c','c','f'],a,b,c,arrplan,normfft,rhsbx,rhsby,rhsbz)
+      !$acc update device(lambdaxy,dxdy,a,b,c,rhsbx,rhsby,rhsbz)
 #if defined(_OPENACC)
       call set_cufft_wspace(pack(arrplan,.true.),istream_acc_queue_1)
 #endif
@@ -388,7 +387,7 @@ module mod_sanity
         bb(k) = b(k) + alpha
       end do
       call updt_rhs_b(['c','c','f'],cbcvel(:,:,3),n,is_bound,rhsbx,rhsby,rhsbz,w)
-      call solver(n,ng,arrplan,normfft,lambdaxy,a,bb,c,cbcvel(:,:,3),['c','c','f'],w)
+      call solver(n,ng,arrplan,normfft,lambdaxy,dxdy,a,bb,c,cbcvel(:,:,3),['c','c','f'],w)
       call fftend(arrplan)
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w) ! actually we are only interested in boundary condition in w
       call chk_helmholtz(lo,hi,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,p,w,cbcvel(:,:,3),is_bound,['c','c','f'],resmax)
@@ -398,7 +397,7 @@ module mod_sanity
       passed = passed.and.passed_loc
       !$acc exit data delete(bb)
     end if
-    !$acc exit data delete(u,v,w,p,lambdaxy,a,b,c,rhsbx,rhsby,rhsbz)
+    !$acc exit data delete(u,v,w,p,lambdaxy,dxdy,a,b,c,rhsbx,rhsby,rhsbz)
     if(.not.passed) then
       call decomp_2d_finalize
       call MPI_FINALIZE(ierr)

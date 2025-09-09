@@ -25,7 +25,7 @@ module mod_solve_helmholtz
   end type rhs_bound
   public solve_helmholtz,rhs_bound
   contains
-  subroutine solve_helmholtz(n,ng,hi,arrplan,normfft,alpha,lambdaxy,a,b,c,rhsbx,rhsby,rhsbz,is_bound,cbc,c_or_f,p)
+  subroutine solve_helmholtz(n,ng,hi,arrplan,normfft,alpha,lambdaxy,dxdy,a,b,c,rhsbx,rhsby,rhsbz,is_bound,cbc,c_or_f,p)
     !
     ! this is a wrapper subroutine to solve 1D/3D helmholtz problems: p/alpha + lap(p) = rhs
     !
@@ -37,7 +37,7 @@ module mod_solve_helmholtz
 #endif
     real(rp),    intent(in   ),                    optional :: normfft
     real(rp),    intent(in   )                              :: alpha
-    real(rp),    intent(in   ), dimension(:,:),    optional :: lambdaxy
+    real(rp),    intent(in   ), dimension(:,:),    optional :: lambdaxy,dxdy
     real(rp),    intent(in   ), dimension(:)                :: a,b,c
     real(rp),    intent(in   ), dimension(:,:,0:), optional :: rhsbx,rhsby,rhsbz
     logical ,    intent(in   ), dimension(2,3)              :: is_bound
@@ -68,7 +68,7 @@ module mod_solve_helmholtz
     end do
     !
     if(.not.is_impdiff_1d) then
-      call solver(n,ng,arrplan,normfft*alphai,lambdaxy,a,bb,c,cbc,c_or_f,p)
+      call solver(n,ng,arrplan,normfft*alphai,lambdaxy,dxdy,a,bb,c,cbc,c_or_f,p)
     else
       call solver_gaussel_z(n,ng,hi,a,bb,c,cbc(:,3),c_or_f,alphai,p)
     end if

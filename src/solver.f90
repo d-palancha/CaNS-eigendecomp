@@ -14,7 +14,7 @@ module mod_solver
   private
   public solver,solver_gaussel_z
   contains
-  subroutine solver(n,ng,arrplan,normfft,lambdaxy,a,b,c,bc,c_or_f,p,is_ptdma_update,aa_z,cc_z)
+  subroutine solver(n,ng,arrplan,normfft,lambdaxy,dxdy,a,b,c,bc,c_or_f,p,is_ptdma_update,aa_z,cc_z)
     !
     ! n.b.: some of the transposes below are suboptimal in slab decompositions,
     !       as they would be a no-op if done in-place (e.g., px = py for xy slabs)
@@ -23,7 +23,7 @@ module mod_solver
     integer , intent(in), dimension(3) :: n,ng
     type(C_PTR), intent(in), dimension(2,2) :: arrplan
     real(rp), intent(in) :: normfft
-    real(rp), intent(in), dimension(:,:) :: lambdaxy
+    real(rp), intent(in), dimension(:,:) :: lambdaxy,dxdy
     real(rp), intent(in), dimension(:) :: a,b,c
     character(len=1), dimension(0:1,3), intent(in) :: bc
     character(len=1), intent(in), dimension(3) :: c_or_f
@@ -79,11 +79,11 @@ module mod_solver
     if(.not.is_poisson_pcr_tdma) then
       call transpose_y_to_z(py,pz)
       !
-      call gaussel(n_z(1),n_z(2),n_z(3)-q,0,a,b,c,is_periodic_z,norm,pz,lambdaxy)
+      call gaussel(n_z(1),n_z(2),n_z(3)-q,0,a,b,c,is_periodic_z,norm,pz,lambdaxy,dxdy)
       !
       call transpose_z_to_y(pz,py)
     else
-      call gaussel_ptdma(n_z(1),n_z(2),n_z(3)-q,0,a,b,c,is_periodic_z,norm,py,lambdaxy,is_ptdma_update_,aa_z,cc_z)
+      call gaussel_ptdma(n_z(1),n_z(2),n_z(3)-q,0,a,b,c,is_periodic_z,norm,py,lambdaxy,dxdy,is_ptdma_update_,aa_z,cc_z)
       if(present(is_ptdma_update)) is_ptdma_update = is_ptdma_update_
     end if
     call fft(arrplan(2,2),py) ! bwd transform in y
@@ -111,7 +111,7 @@ module mod_solver
     end select
   end subroutine solver
   !
-  subroutine gaussel(nx,ny,n,nh,a,b,c,is_periodic,norm,p,lambdaxy)
+  subroutine gaussel(nx,ny,n,nh,a,b,c,is_periodic,norm,p,lambdaxy,dxdy)
     use mod_param, only: eps
     implicit none
     integer , intent(in) :: nx,ny,n,nh
@@ -119,8 +119,9 @@ module mod_solver
     logical , intent(in) :: is_periodic
     real(rp), intent(in) :: norm
     real(rp), intent(inout), dimension(1-nh:,1-nh:,1-nh:) :: p
-    real(rp), intent(in), dimension(nx,ny), optional :: lambdaxy
-    real(rp), dimension(n) :: bb,p2
+    real(rp), intent(in), dimension(nx,ny), optional :: lambdaxy,dxdy
+    real(rp), dimension(n) :: aa,bb,cc,p2
+    real(rp) :: norm_loc
     integer :: i,j,nn
     !
     ! solve tridiagonal system
@@ -132,8 +133,12 @@ module mod_solver
       !$OMP DO COLLAPSE(2)
       do j=1,ny
         do i=1,nx
-          bb(:) = b(1:n) + lambdaxy(i,j)
-          call dgtsv_homebrewed(nn,a,bb,c,norm,p(i,j,1:nn))
+          norm_loc = dxdy(i,j)
+          aa(:) = a(1:n)*norm_loc
+          bb(:) = b(1:n)*norm_loc + lambdaxy(i,j)
+          cc(:) = c(1:n)*norm_loc
+          norm_loc = norm*norm_loc
+          call dgtsv_homebrewed(nn,aa,bb,cc,norm_loc,p(i,j,1:nn))
         end do
       end do
       !$OMP END PARALLEL
@@ -153,13 +158,17 @@ module mod_solver
         !$OMP DO COLLAPSE(2)
         do j=1,ny
           do i=1,nx
+            norm_loc = dxdy(i,j)
+            aa(:) = a(1:n)*norm_loc
+            bb(:) = b(1:n)*norm_loc + lambdaxy(i,j)
+            cc(:) = c(1:n)*norm_loc
+            norm_loc = norm*norm_loc
             p2(:) = 0.
-            p2(1 ) = -a(1 )
-            p2(nn) = p2(nn) - c(nn)
-            bb(:) = b(1:n) + lambdaxy(i,j)
-            call dgtsv_homebrewed(nn,a,bb,c,1._rp,p2(1:nn))
-            p(i,j,nn+1) = (p(i,j,nn+1)*norm - c(nn+1)*p(i,j,1) - a(nn+1)*p(i,j,nn)) / &
-                          (bb(   nn+1)      + c(nn+1)*p2(   1) + a(nn+1)*p2(   nn)+eps)
+            p2(1 ) = -aa(1 )
+            p2(nn) = p2(nn) - cc(nn)
+            call dgtsv_homebrewed(nn,aa,bb,cc,1._rp,p2(1:nn))
+            p(i,j,nn+1) = (p(i,j,nn+1)*norm_loc - cc(nn+1)*p(i,j,1) - aa(nn+1)*p(i,j,nn)) / &
+                          (bb(   nn+1)          + cc(nn+1)*p2(   1) + aa(nn+1)*p2(   nn)+eps)
             p(i,j,1:nn) = p(i,j,1:nn) + p2(1:nn)*p(i,j,nn+1)
           end do
         end do
@@ -183,7 +192,7 @@ module mod_solver
     end if
   end subroutine gaussel
   !
-  subroutine gaussel_ptdma(nx,ny,n,nh,a,b,c,is_periodic,norm,p,lambdaxy,is_update,aa_z_save,cc_z_save)
+  subroutine gaussel_ptdma(nx,ny,n,nh,a,b,c,is_periodic,norm,p,lambdaxy,dxdy,is_update,aa_z_save,cc_z_save)
     !
     ! distributed TDMA solver
     !
@@ -196,13 +205,14 @@ module mod_solver
     logical , intent(in) :: is_periodic
     real(rp), intent(in) :: norm
     real(rp), intent(inout), dimension(1-nh:,1-nh:,1-nh:) :: p
-    real(rp), intent(in), dimension(:,:), optional :: lambdaxy
+    real(rp), intent(in), dimension(:,:), optional :: lambdaxy,dxdy
     logical , intent(inout), optional :: is_update
     real(rp), intent(inout), dimension(:,:,:), optional :: aa_z_save,cc_z_save
     real(rp),              dimension(nx,ny,n) :: aa,cc
     real(rp), allocatable, dimension(: ,: ,:) :: aa_y,cc_y,pp_y,aa_z,cc_z,pp_z
     real(rp), allocatable, dimension(: ,: ,:) :: pp_z_2,cc_z_0
     real(rp) :: z,zz(2),bb(n)
+    real(rp) :: norm_loc,norm_p
     integer :: i,j,k
     integer , dimension(3) :: nr_z
     integer :: nx_r,ny_r,nn
@@ -228,25 +238,27 @@ module mod_solver
       do j=1,ny
         do i=1,nx
           !
-          bb(:) = b(1:n) + lambdaxy(i,j)
+          norm_loc = dxdy(i,j)
+          norm_p = norm*norm_loc
+          bb(:) = b(1:n)*norm_loc + lambdaxy(i,j)
           zz(:) = 1./(bb(1:2)+eps)
-          aa(i,j,1:2) = a(1:2)*zz(:)
-          cc(i,j,1:2) = c(1:2)*zz(:)
-          p( i,j,1:2) = p(i,j,1:2)*norm*zz(:)
+          aa(i,j,1:2) = a(1:2)*norm_loc*zz(:)
+          cc(i,j,1:2) = c(1:2)*norm_loc*zz(:)
+          p( i,j,1:2) = p(i,j,1:2)*norm_p*zz(:)
           !
           ! elimination of lower diagonals
           !
           do k=3,n
-            z = 1./(bb(k)-a(k)*cc(i,j,k-1)+eps)
-            p(i,j,k) = (p(i,j,k)*norm-a(k)*p(i,j,k-1))*z
-            aa(i,j,k) = -a(k)*aa(i,j,k-1)*z
-            cc(i,j,k) = c(k)*z
+            z = 1./(bb(k)-a(k)*norm_loc*cc(i,j,k-1)+eps)
+            p(i,j,k) = (p(i,j,k)*norm_p-a(k)*norm_loc*p(i,j,k-1))*z
+            aa(i,j,k) = -a(k)*norm_loc*aa(i,j,k-1)*z
+            cc(i,j,k) = c(k)*norm_loc*z
           end do
           !
           ! elimination of upper diagonals
           !
           do k=n-2,2,-1
-            p(i,j,k)  = p(i,j,k) - cc(i,j,k)*p(i,j,k+1)
+            p(i,j,k)  =  p( i,j,k)-cc(i,j,k)*p( i,j,k+1)
             aa(i,j,k) =  aa(i,j,k)-cc(i,j,k)*aa(i,j,k+1)
             cc(i,j,k) = -cc(i,j,k)*cc(i,j,k+1)
           end do
