@@ -46,7 +46,7 @@ program cans
   use mod_mom            , only: bulk_forcing
   use mod_rk             , only: rk,rk_scal
   use mod_output         , only: out0d,gen_alias,out1d,out1d_chan,out2d,out3d,write_log_output,write_visu_2d,write_visu_3d
-  use mod_param          , only: ng,l,dl,dli, &
+  use mod_param          , only: ng,l, &
                                  gtype,gr, &
                                  cfl,dtmax,dt_f, &
                                  visc,alpha_max, &
@@ -95,7 +95,7 @@ program cans
 #else
   integer    , dimension(2,2) :: arrplanp
 #endif
-  real(rp), allocatable, dimension(:,:) :: lambdaxyp
+  real(rp), allocatable, dimension(:,:) :: lambdaxyp,dxdyp
   real(rp), allocatable, dimension(:) :: ap,bp,cp
   integer , dimension(3) :: n_z_d
   real(rp), allocatable, dimension(:,:,:) :: ap_d,cp_d
@@ -108,7 +108,7 @@ program cans
 #else
   integer    , dimension(2,2) :: arrplanu,arrplanv,arrplanw
 #endif
-  real(rp), allocatable, dimension(:,:) :: lambdaxyu,lambdaxyv,lambdaxyw
+  real(rp), allocatable, dimension(:,:) :: lambdaxyu,lambdaxyv,lambdaxyw,dxdyu,dxdyv,dxdyw
   real(rp), allocatable, dimension(:) :: au,av,aw,bu,bv,bw,cu,cv,cw
   real(rp) :: normfftu,normfftv,normfftw
   type(rhs_bound) :: rhsbu,rhsbv,rhsbw
@@ -177,6 +177,7 @@ program cans
            dvdtrko(n(1),n(2),n(3)), &
            dwdtrko(n(1),n(2),n(3)))
   allocate(lambdaxyp(n_z(1),n_z(2)))
+  allocate(dxdyp,mold=lambdaxyp)
   allocate(ap(n_z(3)),bp(n_z(3)),cp(n_z(3)))
   if(is_poisson_pcr_tdma) then
 #if defined(_OPENACC)
@@ -218,6 +219,9 @@ program cans
     allocate(lambdaxyu(n_z(1),n_z(2)), &
              lambdaxyv(n_z(1),n_z(2)), &
              lambdaxyw(n_z(1),n_z(2)))
+    allocate(dxdyu,mold=lambdaxyu)
+    allocate(dxdyv,mold=lambdaxyv)
+    allocate(dxdyw,mold=lambdaxyw)
     allocate(au(n_z(3)),bu(n_z(3)),cu(n_z(3)), &
              av(n_z(3)),bv(n_z(3)),cv(n_z(3)), &
              aw(n_z(3)),bw(n_z(3)),cw(n_z(3)))
@@ -288,7 +292,6 @@ program cans
   !$acc enter data copyin(lo,hi,n) async
   !$acc enter data copyin(bforce,l) async
   !$acc enter data copyin(gacc) async
-  !$acc enter data copyin(dl,dli) async
   !$acc enter data copyin(xc_g,xf_g,dxc_g,dxf_g) async
   !$acc enter data create(xc,xf,dxc,dxf,dxci,dxfi,dxci_g,dxfi_g) async
   !$acc enter data copyin(yc_g,yf_g,dyc_g,dyf_g) async
@@ -375,25 +378,25 @@ program cans
   !
   ! initialize Poisson solver
   !
-  call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcpre,bcpre(:,:), &
-                  lambdaxyp,['c','c','c'],ap,bp,cp,arrplanp,normfftp,rhsbp%x,rhsbp%y,rhsbp%z)
-  !$acc enter data copyin(lambdaxyp,ap,bp,cp) async
+  call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbcpre,bcpre(:,:), &
+                  lambdaxyp,dxdyp,['c','c','c'],ap,bp,cp,arrplanp,normfftp,rhsbp%x,rhsbp%y,rhsbp%z)
+  !$acc enter data copyin(lambdaxyp,dxdyp,ap,bp,cp) async
   !$acc enter data copyin(rhsbp,rhsbp%x,rhsbp%y,rhsbp%z) async
   if(is_poisson_pcr_tdma) then
     !$acc enter data create(ap_d,cp_d) async
   end if
   !$acc wait
   if(is_impdiff) then
-    call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcvel(:,:,1),bcvel(:,:,1), &
-                    lambdaxyu,['f','c','c'],au,bu,cu,arrplanu,normfftu,rhsbu%x,rhsbu%y,rhsbu%z)
-    call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcvel(:,:,2),bcvel(:,:,2), &
-                    lambdaxyv,['c','f','c'],av,bv,cv,arrplanv,normfftv,rhsbv%x,rhsbv%y,rhsbv%z)
-    call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,cbcvel(:,:,3),bcvel(:,:,3), &
-                    lambdaxyw,['c','c','f'],aw,bw,cw,arrplanw,normfftw,rhsbw%x,rhsbw%y,rhsbw%z)
+    call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbcvel(:,:,1),bcvel(:,:,1), &
+                    lambdaxyu,dxdyu,['f','c','c'],au,bu,cu,arrplanu,normfftu,rhsbu%x,rhsbu%y,rhsbu%z)
+    call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbcvel(:,:,2),bcvel(:,:,2), &
+                    lambdaxyv,dxdyv,['c','f','c'],av,bv,cv,arrplanv,normfftv,rhsbv%x,rhsbv%y,rhsbv%z)
+    call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,cbcvel(:,:,3),bcvel(:,:,3), &
+                    lambdaxyw,dxdyw,['c','c','f'],aw,bw,cw,arrplanw,normfftw,rhsbw%x,rhsbw%y,rhsbw%z)
     do iscal=1,nscal
       s => scalars(iscal)
-      call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dli,dzci_g,dzfi_g,s%cbc,s%bc, &
-                      s%lambdaxy,['c','c','c'],s%a,s%b,s%c,s%arrplan,s%normfft, &
+      call initsolver(ng,n_x_fft,n_y_fft,lo_z,hi_z,dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g,s%cbc,s%bc, &
+                      s%lambdaxy,s%dxdy,['c','c','c'],s%a,s%b,s%c,s%arrplan,s%normfft, &
                       s%rhsb%x,s%rhsb%y,s%rhsb%z)
     end do
     if(is_impdiff_1d) then
@@ -409,13 +412,13 @@ program cans
         call fftend(s%arrplan)
       end do
     end if
-    !$acc enter data copyin(lambdaxyu,au,bu,cu,lambdaxyv,av,bv,cv,lambdaxyw,aw,bw,cw) async
+    !$acc enter data copyin(lambdaxyu,dxdyu,au,bu,cu,lambdaxyv,dxdyv,av,bv,cv,lambdaxyw,dxdyw,aw,bw,cw) async
     !$acc enter data copyin(rhsbu,rhsbu%x,rhsbu%y,rhsbu%z) async
     !$acc enter data copyin(rhsbv,rhsbv%x,rhsbv%y,rhsbv%z) async
     !$acc enter data copyin(rhsbw,rhsbw%x,rhsbw%y,rhsbw%z) async
     do iscal=1,nscal
       s => scalars(iscal)
-      !$acc enter data copyin(s%lambdaxy,s%a,s%b,s%c) async
+      !$acc enter data copyin(s%lambdaxy,s%dxdy,s%a,s%b,s%c) async
       !$acc enter data copyin(s%rhsb,s%rhsb%x,s%rhsb%y,s%rhsb%z) async
     end do
     !$acc wait
@@ -435,8 +438,9 @@ program cans
                   device_memory_footprint(n,n_z,nscal)/(1._sp*1024**3), ' ***'
 #endif
   if(is_debug_poisson) then
-    call test_sanity_solver(ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z,dli, &
-                            dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi,dzci_g,dzfi_g, &
+    call test_sanity_solver(ng,lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z, &
+                            dxc,dxf,dyc,dyf,dzc,dzf,dxci,dxfi,dyci,dyfi,dzci,dzfi, &
+                            dxci_g,dxfi_g,dyci_g,dyfi_g,dzci_g,dzfi_g, &
                             nb,is_bound,cbcvel,cbcpre,bcvel,bcpre)
   end if
   !
@@ -528,7 +532,7 @@ program cans
         fs(iscal) = fs(iscal) + s%f
         if(is_impdiff) then
           call solve_helmholtz(n,ng,hi,s%arrplan,s%normfft,-0.5*s%alpha*dtrk, &
-                               s%lambdaxy,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound,s%cbc,['c','c','c'],s%val)
+                               s%lambdaxy,s%dxdy,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound,s%cbc,['c','c','c'],s%val)
         end if
         call boundp(s%cbc,n,s%bc,nb,is_bound,dxc,dyc,dzc,s%val)
       end do
@@ -539,16 +543,16 @@ program cans
       if(is_impdiff) then
         alpha = -.5*visc*dtrk
         call solve_helmholtz(n,ng,hi,arrplanu,normfftu,alpha, &
-                             lambdaxyu,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'],u)
+                             lambdaxyu,dxdyu,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'],u)
         call solve_helmholtz(n,ng,hi,arrplanv,normfftv,alpha, &
-                             lambdaxyv,av,bv,cv,rhsbv%x,rhsbv%y,rhsbv%z,is_bound,cbcvel(:,:,2),['c','f','c'],v)
+                             lambdaxyv,dxdyv,av,bv,cv,rhsbv%x,rhsbv%y,rhsbv%z,is_bound,cbcvel(:,:,2),['c','f','c'],v)
         call solve_helmholtz(n,ng,hi,arrplanw,normfftw,alpha, &
-                             lambdaxyw,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'],w)
+                             lambdaxyw,dxdyw,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'],w)
       end if
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)
       call fillps(n,dxfi,dyfi,dzfi,dtrki,u,v,w,pp)
       call updt_rhs_b(['c','c','c'],cbcpre,n,is_bound,rhsbp%x,rhsbp%y,rhsbp%z,pp)
-      call solver(n,ng,arrplanp,normfftp,lambdaxyp,ap,bp,cp,cbcpre,['c','c','c'],pp,is_ptdma_update_p,ap_d,cp_d)
+      call solver(n,ng,arrplanp,normfftp,lambdaxyp,dxdyp,ap,bp,cp,cbcpre,['c','c','c'],pp,is_ptdma_update_p,ap_d,cp_d)
       call boundp(cbcpre,n,bcpre,nb,is_bound,dxc,dyc,dzc,pp)
       call correc(n,dxci,dyci,dzci,dtrk,pp,u,v,w)
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dxc,dxf,dyc,dyf,dzc,dzf,u,v,w)

@@ -31,7 +31,7 @@ module mod_scal
 #else
     integer    , dimension(2,2) :: arrplan
 #endif
-    real(rp), allocatable, dimension(:,:) :: lambdaxy
+    real(rp), allocatable, dimension(:,:) :: lambdaxy,dxdy
     real(rp), allocatable, dimension(:) :: a,b,c
     real(rp) :: normfft
     type(rhs_bound) :: rhsb
@@ -331,6 +331,7 @@ module mod_scal
       allocate(scalars(iscal)%dsdtrko(n(1),n(2),n(3)))
       if(is_impdiff) then
         allocate(scalars(iscal)%lambdaxy(n_z(1),n_z(2)))
+        allocate(scalars(iscal)%dxdy(n_z(1),n_z(2)))
         allocate(scalars(iscal)%a(n_z(3)), &
                  scalars(iscal)%b(n_z(3)), &
                  scalars(iscal)%c(n_z(3)))

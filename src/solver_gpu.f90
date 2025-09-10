@@ -31,7 +31,7 @@ module mod_solver_gpu
   private
   public solver_gpu,solver_gaussel_z_gpu
   contains
-  subroutine solver_gpu(n,ng,arrplan,normfft,lambdaxy,a,b,c,bc,c_or_f,p,is_ptdma_update,aa_z,cc_z)
+  subroutine solver_gpu(n,ng,arrplan,normfft,lambdaxy,dxdy,a,b,c,bc,c_or_f,p,is_ptdma_update,aa_z,cc_z)
     implicit none
     integer , intent(in), dimension(3) :: n,ng
 #if !defined(_USE_HIP)
@@ -40,7 +40,7 @@ module mod_solver_gpu
     type(C_PTR), intent(in), dimension(2,2) :: arrplan
 #endif
     real(rp), intent(in) :: normfft
-    real(rp), intent(in), dimension(:,:) :: lambdaxy
+    real(rp), intent(in), dimension(:,:) :: lambdaxy,dxdy
     real(rp), intent(in), dimension(:) :: a,b,c
     character(len=1), dimension(0:1,3), intent(in) :: bc
     character(len=1), intent(in), dimension(3) :: c_or_f
@@ -163,7 +163,7 @@ module mod_solver_gpu
       !$acc end host_data
 #endif
       !
-      call gaussel_gpu(n_z_0(1),n_z_0(2),n_z_0(3)-q,0,a,b,c,is_periodic_z,norm,pz,work,pz_aux_1,lambdaxy)
+      call gaussel_gpu(n_z_0(1),n_z_0(2),n_z_0(3)-q,0,a,b,c,is_periodic_z,norm,pz,work,pz_aux_1,lambdaxy,dxdy)
       !
 #if !defined(_USE_DIEZDECOMP)
       !$acc host_data use_device(pz,py,work)
@@ -193,7 +193,8 @@ module mod_solver_gpu
         end do
       end block
       !
-      call gaussel_ptdma_gpu(n_z_0(1),n_z_0(2),n_z_0(3)-q,lo_z_0(3),0,a,b,c,is_periodic_z,norm,pz,work,pz_aux_1,is_ptdma_update_,lambdaxy,aa_z,cc_z)
+      call gaussel_ptdma_gpu(n_z_0(1),n_z_0(2),n_z_0(3)-q,lo_z_0(3),0,a,b,c,is_periodic_z,norm,pz,work,pz_aux_1, &
+                             is_ptdma_update_,lambdaxy,dxdy,aa_z,cc_z)
       if(present(is_ptdma_update)) is_ptdma_update = is_ptdma_update_
       !
       block
@@ -287,7 +288,7 @@ module mod_solver_gpu
     end select
   end subroutine solver_gpu
   !
-  subroutine gaussel_gpu(nx,ny,n,nh,a,b,c,is_periodic,norm,p,d,p2,lambdaxy)
+  subroutine gaussel_gpu(nx,ny,n,nh,a,b,c,is_periodic,norm,p,d,p2,lambdaxy,dxdy)
     use mod_param, only: eps
     implicit none
     integer , intent(in) :: nx,ny,n,nh
@@ -296,8 +297,9 @@ module mod_solver_gpu
     real(rp), intent(in) :: norm
     real(rp), intent(inout), dimension(1-nh:,1-nh:,1-nh:) :: p
     real(rp),                dimension(nx,ny,n) :: d,p2
-    real(rp), intent(in), dimension(:,:), optional :: lambdaxy
+    real(rp), intent(in), dimension(:,:), optional :: lambdaxy,dxdy
     real(rp) :: z,lxy
+    real(rp) :: norm_loc,norm_p
     integer :: i,j,k,nn
     real(rp), allocatable, save, dimension(:) :: dd,pp2
     !
@@ -309,16 +311,18 @@ module mod_solver_gpu
       !$acc parallel loop gang vector collapse(2) default(present) private(lxy,z) async(1)
       do j=1,ny
         do i=1,nx
+          norm_loc = dxdy(i,j)
+          norm_p   = norm*norm_loc
           lxy = lambdaxy(i,j)
           !
-          z = 1./(b(1)+lxy+eps)
-          d(i,j,1) = c(1)*z
-          p(i,j,1) = p(i,j,1)*norm*z
+          z = 1./(b(1)*norm_loc+lxy+eps)
+          d(i,j,1) = c(1)*norm_loc*z
+          p(i,j,1) = p(i,j,1)*norm_p*z
           !$acc loop seq
           do k=2,nn
-            z        = 1./(b(k)+lxy-a(k)*d(i,j,k-1)+eps)
-            p(i,j,k) = (p(i,j,k)*norm-a(k)*p(i,j,k-1))*z
-            d(i,j,k) = c(k)*z
+            z        = 1./(b(k)*norm_loc+lxy-a(k)*norm_loc*d(i,j,k-1)+eps)
+            p(i,j,k) = (p(i,j,k)*norm_p-a(k)*norm_loc*p(i,j,k-1))*z
+            d(i,j,k) = c(k)*norm_loc*z
           end do
           !
           !$acc loop seq
@@ -331,23 +335,25 @@ module mod_solver_gpu
         !$acc parallel loop gang vector collapse(2) default(present) private(lxy,z) async(1)
         do j=1,ny
           do i=1,nx
+            norm_loc = dxdy(i,j)
+            norm_p   = norm*norm_loc
             lxy = lambdaxy(i,j)
             !
             !$acc loop seq
             do k=1,nn
               p2(i,j,k) = 0.
             end do
-            p2(i,j,1 ) = -a(1 )
-            p2(i,j,nn) = -c(nn)
+            p2(i,j,1 ) = -a(1 )*norm_loc
+            p2(i,j,nn) = -c(nn)*norm_loc
             !
-            z = 1./(b(1)+lxy+eps)
-            d( i,j,1) = c(1)*z
+            z = 1./(b(1)*norm_loc+lxy+eps)
+            d( i,j,1) = c(1)*norm_loc*z
             p2(i,j,1) = p2(i,j,1)*z
             !$acc loop seq
             do k=2,nn
-              z         = 1./(b(k)+lxy-a(k)*d(i,j,k-1)+eps)
-              p2(i,j,k) = (p2(i,j,k)-a(k)*p2(i,j,k-1))*z
-              d(i,j,k)  = c(k)*z
+              z         = 1./(b(k)*norm_loc+lxy-a(k)*norm_loc*d(i,j,k-1)+eps)
+              p2(i,j,k) = (p2(i,j,k)-a(k)*norm_loc*p2(i,j,k-1))*z
+              d(i,j,k)  = c(k)*norm_loc*z
             end do
             !
             !$acc loop seq
@@ -355,8 +361,8 @@ module mod_solver_gpu
               p2(i,j,k) = p2(i,j,k) - d(i,j,k)*p2(i,j,k+1)
             end do
             !
-            p(i,j,nn+1) = (p(i,j,nn+1)*norm       - c(nn+1)*p( i,j,1) - a(nn+1)*p( i,j,nn)) / &
-                          (b(    nn+1)      + lxy + c(nn+1)*p2(i,j,1) + a(nn+1)*p2(i,j,nn)+eps)
+            p(i,j,nn+1) = (p(i,j,nn+1)*norm_p     - c(nn+1)*norm_loc*p( i,j,1) - a(nn+1)*norm_loc*p( i,j,nn)) / &
+                          (b(    nn+1)      + lxy + c(nn+1)*norm_loc*p2(i,j,1) + a(nn+1)*norm_loc*p2(i,j,nn)+eps)
             !$acc loop seq
             do k=1,nn
               p(i,j,k) = p(i,j,k) + p2(i,j,k)*p(i,j,nn+1)
@@ -430,7 +436,7 @@ module mod_solver_gpu
     end if
   end subroutine gaussel_gpu
   !
-  subroutine gaussel_ptdma_gpu(nx,ny,n,lo,nh,a,b,c,is_periodic,norm,p,aa,cc,is_update,lambdaxy,aa_z_save,cc_z_save)
+  subroutine gaussel_ptdma_gpu(nx,ny,n,lo,nh,a,b,c,is_periodic,norm,p,aa,cc,is_update,lambdaxy,dxdy,aa_z_save,cc_z_save)
     !
     ! distributed TDMA solver
     !
@@ -445,11 +451,12 @@ module mod_solver_gpu
     real(rp), intent(inout), dimension(1-nh:,1-nh:,1-nh:) :: p
     real(rp),                dimension(nx,ny,n) :: aa,cc
     logical , intent(inout), optional :: is_update
-    real(rp), intent(in   ), dimension(:,:), optional :: lambdaxy
+    real(rp), intent(in   ), dimension(:,:), optional :: lambdaxy,dxdy
     real(rp), intent(inout), dimension(:,:,:), optional :: aa_z_save,cc_z_save
     real(rp), allocatable, dimension(:,:,:), save :: aa_y,cc_y,pp_y,aa_z,cc_z,pp_z
     real(rp), allocatable, dimension(:,:,:), save :: pp_z_2,cc_z_0
     real(rp) :: z,z1,z2,lxy
+    real(rp) :: norm_loc,norm_p
     integer :: i,j,k
     integer , dimension(3) :: nr_z
     integer :: nx_r,ny_r,nn,dk_g
@@ -478,25 +485,27 @@ module mod_solver_gpu
       !$acc parallel loop gang vector collapse(2) default(present) private(lxy,z,z1,z2) async(1)
       do j=1,ny
         do i=1,nx
+          norm_loc = dxdy(i,j)
+          norm_p   = norm*norm_loc
           lxy = lambdaxy(i,j)
           !
-          z1 = 1./(b(1+dk_g)+lxy+eps)
-          z2 = 1./(b(2+dk_g)+lxy+eps)
-          aa(i,j,1) = a(1+dk_g)*z1
-          aa(i,j,2) = a(2+dk_g)*z2
-          cc(i,j,1) = c(1+dk_g)*z1
-          cc(i,j,2) = c(2+dk_g)*z2
-          p(i,j,1) = p(i,j,1)*norm*z1
-          p(i,j,2) = p(i,j,2)*norm*z2
+          z1 = 1./(b(1+dk_g)*norm_loc+lxy+eps)
+          z2 = 1./(b(2+dk_g)*norm_loc+lxy+eps)
+          aa(i,j,1) = a(1+dk_g)*norm_loc*z1
+          aa(i,j,2) = a(2+dk_g)*norm_loc*z2
+          cc(i,j,1) = c(1+dk_g)*norm_loc*z1
+          cc(i,j,2) = c(2+dk_g)*norm_loc*z2
+          p(i,j,1) = p(i,j,1)*norm_p*z1
+          p(i,j,2) = p(i,j,2)*norm_p*z2
           !
           ! elimination of lower diagonals
           !
           !$acc loop seq
           do k=3,n
-            z = 1./(b(k+dk_g)+lxy-a(k+dk_g)*cc(i,j,k-1)+eps)
-            p(i,j,k) = (p(i,j,k)*norm-a(k+dk_g)*p(i,j,k-1))*z
-            aa(i,j,k) = -a(k+dk_g)*aa(i,j,k-1)*z
-            cc(i,j,k) = c(k+dk_g)*z
+            z = 1./(b(k+dk_g)*norm_loc+lxy-a(k+dk_g)*norm_loc*cc(i,j,k-1)+eps)
+            p(i,j,k) = (p(i,j,k)*norm_p-a(k+dk_g)*norm_loc*p(i,j,k-1))*z
+            aa(i,j,k) = -a(k+dk_g)*norm_loc*aa(i,j,k-1)*z
+            cc(i,j,k) = c(k+dk_g)*norm_loc*z
           end do
           !
           ! elimination of upper diagonals
@@ -532,15 +541,15 @@ module mod_solver_gpu
           aa(i,j,2) = a(2+dk_g)*z2
           cc(i,j,1) = c(1+dk_g)*z1
           cc(i,j,2) = c(2+dk_g)*z2
-          p(i,j,1) = p(i,j,1)*norm*z1
-          p(i,j,2) = p(i,j,2)*norm*z2
+          p(i,j,1) = p(i,j,1)*norm_p*z1
+          p(i,j,2) = p(i,j,2)*norm_p*z2
           !
           ! elimination of lower diagonals
           !
           !$acc loop seq
           do k=3,n
             z = 1./(b(k+dk_g)-a(k+dk_g)*cc(i,j,k-1)+eps)
-            p(i,j,k) = (p(i,j,k)*norm-a(k+dk_g)*p(i,j,k-1))*z
+            p(i,j,k) = (p(i,j,k)*norm_p-a(k+dk_g)*p(i,j,k-1))*z
             aa(i,j,k) = -a(k+dk_g)*aa(i,j,k-1)*z
             cc(i,j,k) = c(k+dk_g)*z
           end do
@@ -1113,7 +1122,8 @@ module mod_solver_gpu
     end if
   end subroutine solver_gaussel_z_gpu
 #if 0
-  subroutine gaussel_ptdma_gpu_fast(nx,ny,n,lo,nh,a_g,b_g,c_g,is_periodic,norm,p,is_update,lambdaxy,aa,bb,cc,aa_z,bb_z,cc_z,pp_z_2)
+  subroutine gaussel_ptdma_gpu_fast(nx,ny,n,lo,nh,a_g,b_g,c_g,is_periodic,norm,p, &
+                                    is_update,lambdaxy,dxdy,aa,bb,cc,aa_z,bb_z,cc_z,pp_z_2)
     !
     ! distributed TDMA solver using pre-computed coefficients
     !
@@ -1129,10 +1139,11 @@ module mod_solver_gpu
     real(rp), intent(in) :: norm
     real(rp), intent(inout), dimension(1-nh:,1-nh:,1-nh:) :: p
     logical , intent(inout) :: is_update
-    real(rp), intent(in), dimension(:,:), optional :: lambdaxy
+    real(rp), intent(in), dimension(:,:), optional :: lambdaxy,dxdy
     real(rp), intent(inout), dimension(:,:,:), optional :: aa,bb,cc,aa_z,bb_z,cc_z,pp_z_2
     real(rp), allocatable, dimension(:,:,:), save :: aa_y,bb_y,cc_y,pp_y,pp_z
     real(rp) :: z,z1,z2,lxy
+    real(rp) :: norm_p
     integer :: i,j,k,dk_g
     integer , dimension(3) :: nr_z
     integer :: nx_r,ny_r,nn
@@ -1162,9 +1173,9 @@ module mod_solver_gpu
       do j=1,ny
         do i=1,nx
           do k=1,n
-            aa(i,j,k) = a_g(k+dk_g)
-            bb(i,j,k) = b_g(k+dk_g) + lambdaxy(i,j)
-            cc(i,j,k) = c_g(k+dk_g)
+            aa(i,j,k) = a_g(k+dk_g)*dxdy(i,j)
+            bb(i,j,k) = b_g(k+dk_g)*dxdy(i,j) + lambdaxy(i,j)
+            cc(i,j,k) = c_g(k+dk_g)*dxdy(i,j)
           end do
         end do
       end do
@@ -1282,15 +1293,16 @@ module mod_solver_gpu
     !$acc parallel loop gang vector collapse(2) default(present) async(1)
     do j=1,ny
       do i=1,nx
-        p(i,j,1) = p(i,j,1)*norm
-        p(i,j,2) = p(i,j,2)*norm
+        norm_p = norm*dxdy(i,j)
+        p(i,j,1) = p(i,j,1)*norm_p
+        p(i,j,2) = p(i,j,2)*norm_p
         !$acc loop seq
         do k=3,n
-          p(i,j,k) = p(i,j,k)*norm - a_g(k+dk_g)*bb(i,j,k-1)*p(i,j,k-1)
+          p(i,j,k) = p(i,j,k)*norm_p - a_g(k+dk_g)*dxdy(i,j)*bb(i,j,k-1)*p(i,j,k-1)
         end do
         !$acc loop seq
         do k=n-2,1,-1
-          p(i,j,k) = p(i,j,k)      - c_g(k+dk_g)*bb(i,j,k+1)*p(i,j,k+1)
+          p(i,j,k) = p(i,j,k)        - c_g(k+dk_g)*dxdy(i,j)*bb(i,j,k+1)*p(i,j,k+1)
         end do
       end do
     end do
@@ -1331,8 +1343,9 @@ module mod_solver_gpu
       !$acc parallel loop gang vector collapse(2) default(present) async(1)
       do j=1,ny_r
         do i=1,nx_r
-          pp_z(i,j,nn+1) = (pp_z(i,j,nn+1)*norm - cc_z(i,j,nn+1)*pp_z(  i,j,1) - aa_z(i,j,nn+1)*pp_z(  i,j,nn))/ &
-                           (bb_z(i,j,nn+1)      + cc_z(i,j,nn+1)*pp_z_2(i,j,1) + aa_z(i,j,nn+1)*pp_z_2(i,j,nn))
+          norm_p = norm*dxdy(i,j)
+          pp_z(i,j,nn+1) = (pp_z(i,j,nn+1)*norm_p - cc_z(i,j,nn+1)*pp_z(  i,j,1) - aa_z(i,j,nn+1)*pp_z(  i,j,nn))/ &
+                           (bb_z(i,j,nn+1)        + cc_z(i,j,nn+1)*pp_z_2(i,j,1) + aa_z(i,j,nn+1)*pp_z_2(i,j,nn))
           !$acc loop seq
           do k=1,nn
             pp_z(i,j,k) = pp_z(i,j,k) + pp_z_2(i,j,k)*pp_z(i,j,nn+1)

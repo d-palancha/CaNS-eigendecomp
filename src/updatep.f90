@@ -11,13 +11,13 @@ module mod_updatep
   private
   public updatep
   contains
-  subroutine updatep(n,dxci,dyci,dzci,dxfi,dyfi,dzfi,alpha,pp,p)
+  subroutine updatep(n,dxci,dxfi,dyci,dyfi,dzci,dzfi,alpha,pp,p)
     !
     ! updates the final pressure
     !
     implicit none
     integer , intent(in   ), dimension(3) :: n
-    real(rp), intent(in   ), dimension(0:) :: dxci,dyci,dzci,dxfi,dyfi,dzfi
+    real(rp), intent(in   ), dimension(0:) :: dxci,dxfi,dyci,dyfi,dzci,dzfi
     real(rp), intent(in   ) :: alpha
     real(rp), intent(in   ), dimension(0:,0:,0:) :: pp
     real(rp), intent(inout), dimension(0:,0:,0:) :: p
