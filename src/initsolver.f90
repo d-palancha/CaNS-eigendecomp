@@ -78,21 +78,29 @@ module mod_initsolver
     !
     ! add scaled eigenvalues and store cell areas
     !
-    if(     c_or_f(3) == 'c') then
+    select case(c_or_f(1)//c_or_f(2)//c_or_f(3))
+    case('ccc','ccf')
       do j=lo_z(2),hi_z(2)
         do i=lo_z(1),hi_z(1)
           lambdaxy(i,j) = lambdax(i)*dyf_g(j)+lambday(j)*dxf_g(i)
           dxdy(i,j) = dxf_g(i)*dyf_g(j)
         end do
       end do
-    else if(c_or_f(3) == 'f') then
+    case('fcc')
       do j=lo_z(2),hi_z(2)
         do i=lo_z(1),hi_z(1)
-          lambdaxy(i,j) = lambdax(i)*dyc_g(j)+lambday(j)*dxc_g(i)
-          dxdy(i,j) = dxc_g(i)*dyc_g(j)
+          lambdaxy(i,j) = lambdax(i)*dyf_g(j)+lambday(j)*dxc_g(i)
+          dxdy(i,j) = dxc_g(i)*dyf_g(j)
         end do
       end do
-    end if
+    case('cfc')
+      do j=lo_z(2),hi_z(2)
+        do i=lo_z(1),hi_z(1)
+          lambdaxy(i,j) = lambdax(i)*dyc_g(j)+lambday(j)*dxf_g(i)
+          dxdy(i,j) = dxf_g(i)*dyc_g(j)
+        end do
+      end do
+    end select
     !
     ! compute values to be added to the right hand side
     !
