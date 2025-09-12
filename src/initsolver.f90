@@ -34,14 +34,27 @@ module mod_initsolver
     real(rp), intent(out), dimension(:,:,0:) :: rhsby
     real(rp), intent(out), dimension(:,:,0:) :: rhsbz
     real(rp), intent(out) :: normfft
-    real(rp), dimension(3)        :: dl
+    real(rp), dimension(3)         :: dl
     real(rp), dimension(0:ng(1)+1) :: dxc_g,dxf_g
     real(rp), dimension(0:ng(2)+1) :: dyc_g,dyf_g
     real(rp), dimension(0:ng(3)+1) :: dzc_g,dzf_g
-    integer :: i,j
+    integer :: i,j,info
     real(rp), dimension(ng(1)) :: lambdax
     real(rp), dimension(ng(2)) :: lambday
-    real(rp), dimension(ng(3)) :: a_g,b_g,c_g
+    real(rp), dimension(ng(1)-1) :: ax_g, cx_g
+    real(rp), dimension(ng(2)-1) :: ay_g, cy_g
+    real(rp), dimension(ng(3)-1) :: az_g, cz_g
+    real(rp), dimension(ng(1))   :: bx_g
+    real(rp), dimension(ng(2))   :: by_g
+    real(rp), dimension(ng(3))   :: bz_g
+    logical,  dimension(2) :: non_uniform_grid = .false.
+    !
+    if(any(dxc_g)/=dxc_g(lbound(dxc_g))) then
+      non_uniform_grid(1) = .true.
+    end if 
+    if(any(dyc_g)/=dyc_g(lbound(dyc_g))) then
+      non_uniform_grid(2) = .true.
+    end if
     !
     dxc_g(:) = dxci_g(:)**(-1)
     dxf_g(:) = dxfi_g(:)**(-1)
@@ -50,31 +63,41 @@ module mod_initsolver
     dzc_g(:) = dzci_g(:)**(-1)
     dzf_g(:) = dzfi_g(:)**(-1)
     !
+    ! compute tridiagonal matrix for non uniform grid
+    !
+    if(non_uniform_grid(1)) then
+      call tridmatrix(cbc(:,1),ng(1),dxci_g,dxfi_g,c_or_f(1),ax_g,bx_g,cx_g)
+    end if
+    if(non_uniform_grid(2)) then
+      call tridmatrix(cbc(:,2),ng(2),dyci_g,dxfi_g,c_or_f(2),ay_g,by_g,cy_g) 
+    end if
+    !
     ! compute and distribute coefficients for tridiagonal solver
     !
-    call tridmatrix(cbc(:,3),ng(3),dzci_g,dzfi_g,c_or_f(3),a_g,b_g,c_g)
+    call tridmatrix(cbc(:,3),ng(3),dzci_g,dzfi_g,c_or_f(3),az_g,bz_g,cz_g)
     !
     ! z tri-diagonal system is not symmetrized -- r.h.s. requires additional scaling
+    ! deleted scaling for z since it is no longer required for any case
     !
-    select case(c_or_f(3))
-    case('c')
-      a(:) = a_g(lo_z(3):hi_z(3))*dzfi_g(lo_z(3):hi_z(3))
-      b(:) = b_g(lo_z(3):hi_z(3))*dzfi_g(lo_z(3):hi_z(3))
-      c(:) = c_g(lo_z(3):hi_z(3))*dzfi_g(lo_z(3):hi_z(3))
-    case('f')
-      a(:) = a_g(lo_z(3):hi_z(3))*dzci_g(lo_z(3):hi_z(3))
-      b(:) = b_g(lo_z(3):hi_z(3))*dzci_g(lo_z(3):hi_z(3))
-      c(:) = c_g(lo_z(3):hi_z(3))*dzci_g(lo_z(3):hi_z(3))
-    end select
     !
-    ! generating eigenvalues for uniform grid spacing
+    ! generating eigenvalues (and eigenvectors for non uniform grids)
     !
     dl(1) = dxf_g(0) ! == dxc_g(0)
     dl(2) = dyf_g(0) ! == dyc_g(0)
-    call eigenvalues(ng(1),cbc(:,1),c_or_f(1),lambdax)
-    lambdax(:) = lambdax(:)/dl(1)
-    call eigenvalues(ng(2),cbc(:,2),c_or_f(2),lambday)
-    lambday(:) = lambday(:)/dl(2)
+    !
+    if(.not. non_uniform_grid(1)) then
+      call eigenvalues(ng(1),cbc(:,1),c_or_f(1),lambdax)
+      lambdax(:) = lambdax(:)/dl(1)
+    else
+      call dstevd('V', )
+    end if
+    !
+    if(.not. non_uniform_grid(2)) then
+      call eigenvalues(ng(2),cbc(:,2),c_or_f(2),lambday)
+      lambday(:) = lambday(:)/dl(2)
+    else
+      call dstevd('V', )
+    end if
     !
     ! add scaled eigenvalues and store cell areas
     !
@@ -82,21 +105,35 @@ module mod_initsolver
     case('ccc','ccf')
       do j=lo_z(2),hi_z(2)
         do i=lo_z(1),hi_z(1)
-          lambdaxy(i,j) = lambdax(i)*dyf_g(j)+lambday(j)*dxf_g(i)
+          lambdaxy(i,j) = lambdax(i)+lambday(j)
           dxdy(i,j) = dxf_g(i)*dyf_g(j)
         end do
       end do
     case('fcc')
       do j=lo_z(2),hi_z(2)
         do i=lo_z(1),hi_z(1)
-          lambdaxy(i,j) = lambdax(i)*dyf_g(j)+lambday(j)*dxc_g(i)
+          lambdaxy(i,j) = lambdax(i)+lambday(j)
           dxdy(i,j) = dxc_g(i)*dyf_g(j)
         end do
       end do
     case('cfc')
       do j=lo_z(2),hi_z(2)
         do i=lo_z(1),hi_z(1)
-          lambdaxy(i,j) = lambdax(i)*dyc_g(j)+lambday(j)*dxf_g(i)
+          lambdaxy(i,j) = lambdax(i)+lambday(j)
+          dxdy(i,j) = dxf_g(i)*dyc_g(j)
+        end do
+      end do
+    case('fcc')
+      do j=lo_z(2),hi_z(2)
+        do i=lo_z(1),hi_z(1)
+          lambdaxy(i,j) = lambdax(i)+lambday(j)
+          dxdy(i,j) = dxc_g(i)*dyf_g(j)
+        end do
+      end do
+    case('cfc')
+      do j=lo_z(2),hi_z(2)
+        do i=lo_z(1),hi_z(1)
+          lambdaxy(i,j) = lambdax(i)+lambday(j)
           dxdy(i,j) = dxf_g(i)*dyc_g(j)
         end do
       end do
@@ -192,20 +229,6 @@ module mod_initsolver
       end do
     end select
   end subroutine eigenvalues
-  !
-  subroutine tridmatrix(bc,n,dzci,dzfi,c_or_f,a,b,c)
-    implicit none
-    character(len=1), intent(in), dimension(0:1) :: bc
-    integer , intent(in) :: n
-    real(rp), intent(in), dimension(0:) :: dzci,dzfi
-    character(len=1), intent(in) :: c_or_f ! c -> cell-centered; f-face-centered
-    real(rp), intent(out), dimension(n) :: a,b,c
-    integer :: k
-    integer :: ibound
-    real(rp), dimension(0:1) :: factor
-    select case(c_or_f)
-    case('c')
-      do k=1,n
         a(k) = dzci(k-1)
         c(k) = dzci(k)
       end do
